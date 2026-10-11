@@ -22,6 +22,18 @@ mkdir -p "$STAGE/AudioBridge.app/Contents/MacOS" "$STAGE/AudioBridge.app/Content
 cp "$BINARY" "$STAGE/AudioBridge.app/Contents/MacOS/AudioBridge"
 chmod 755 "$STAGE/AudioBridge.app/Contents/MacOS/AudioBridge"
 cp "$ROOT/Resources/Info.plist" "$STAGE/AudioBridge.app/Contents/Info.plist"
+# Build a complete macOS icon family from the user-supplied source artwork.
+ICONSET="$STAGE/AudioBridge.iconset"
+mkdir -p "$ICONSET"
+for SIZE in 16 32 128 256 512; do
+  /usr/bin/sips -z "$SIZE" "$SIZE" "$ROOT/Resources/AudioBridge.png" \
+    --out "$ICONSET/icon_${SIZE}x${SIZE}.png" >/dev/null
+  DOUBLE_SIZE=$((SIZE * 2))
+  /usr/bin/sips -z "$DOUBLE_SIZE" "$DOUBLE_SIZE" "$ROOT/Resources/AudioBridge.png" \
+    --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" >/dev/null
+done
+/usr/bin/iconutil -c icns "$ICONSET" \
+  -o "$STAGE/AudioBridge.app/Contents/Resources/AudioBridge.icns"
 # SwiftPM resource bundles, if introduced later, belong beside the executable.
 for RESOURCE in "$BINARY_DIR"/*.bundle; do
   [[ -d "$RESOURCE" ]] || continue

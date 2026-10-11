@@ -13,7 +13,8 @@ struct AudioBridgeApp: App {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.headline)
                 Label(model.status, systemImage: "info.circle")
-                Text(shell.detail).foregroundStyle(.secondary)
+                Text("Experimental identity routing. Drift correction is not implemented.").foregroundStyle(.secondary)
+                if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
                 Text("Output: \(endpointName(.output))")
@@ -21,9 +22,10 @@ struct AudioBridgeApp: App {
                 if let issue = model.outputIssue { Text(issue).font(.caption) }
                 Text("Input / output meters: \(shell.meterText)").foregroundStyle(.secondary)
                 HStack {
-                    Button("Start") {}.disabled(true)
+                    Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
+                    Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
                     SettingsLink { Text("Settings…") }
-                    Button("Quit") { NSApplication.shared.terminate(nil) }
+                    Button("Quit") { model.quit() }
                 }
             }
             .padding().frame(width: 380)
@@ -47,9 +49,10 @@ private struct SettingsView: View {
         TabView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Device discovery only — audio routing is not yet implemented.")
+                    Text("Experimental identity routing at 0 dB. Drift correction and rate conversion are not implemented; use for attended checks only.")
                         .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
+                    if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
                     endpointPicker(.input)
                     endpointPicker(.output)
                     Divider()
@@ -59,10 +62,18 @@ private struct SettingsView: View {
                             .disabled(!model.permissionCanBeRequested)
                         Button("Open Privacy Settings") { model.openPrivacySettings() }
                     }
-                    Text("Permission is requested only when you press the button. No audio is captured in this phase.")
+                    Text("Permission is requested only when you press the button. Capture begins only after you press Start.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button(model.refreshing ? "Refreshing…" : "Refresh devices and permission") { model.refresh() }
                         .disabled(model.refreshing)
+                    HStack {
+                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
+                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
+                        Text(model.status).font(.caption)
+                    }
+                    if model.routingRequested || model.routingTransitioning {
+                        Text("Stop routing to change devices or channels.").font(.caption)
+                    }
                     Text("Matrix, gain, latency and login controls are not yet implemented.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
@@ -74,6 +85,13 @@ private struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
+                    if let metrics = model.engineSnapshot {
+                        Text("Input callbacks: \(metrics.inputCallbacks) · output callbacks: \(metrics.outputCallbacks)")
+                        Text("Captured / rendered frames: \(metrics.inputFrames) / \(metrics.outputFrames)")
+                        Text("FIFO: \(metrics.bufferedFrames) frames · prefill complete: \(metrics.primed ? "yes" : "no")")
+                        Text("Underrun / overrun frames: \(metrics.underrunFrames) / \(metrics.overrunFrames) · format faults: \(metrics.formatFaults)")
+                        Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · drift correction: not implemented")
+                    }
                     Text("Microphone permission: \(model.permission)")
                     HStack {
                         Button("Refresh") { model.refresh() }.disabled(model.refreshing)
@@ -99,8 +117,8 @@ private struct SettingsView: View {
             }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.title2)
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 1 device probe")
-                Text("No audio capture or routing. No third-party dependencies.")
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 2 experimental audio path")
+                Text("Audio stays on this Mac. No recording, network transport or third-party dependencies.")
             }.padding().tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding().frame(width: 680, height: 580)
@@ -122,16 +140,15 @@ private struct SettingsView: View {
                     Text("Choose explicitly…").tag("")
                     ForEach(available) { device in
                         Label {
-                            Text("\(device.name) [\(device.uid)]")
+                            Text(device.name)
                         } icon: {
                             DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid])
                         }.tag(device.uid)
                     }
                     if let uid = selected.uid, !available.contains(where: { $0.uid == uid }) {
-                        Text("Missing / unavailable: \(uid)").tag(uid)
+                        Text("Selected device unavailable").tag(uid)
                     }
                 }
-                if let uid = selected.uid { Text("UID: \(uid)").font(.caption).textSelection(.enabled) }
                 HStack {
                     channelPicker(direction, lane: 1, channels: device?.facts(for: direction).physicalChannels ?? [])
                     channelPicker(direction, lane: 2, channels: device?.facts(for: direction).physicalChannels ?? [])
@@ -145,7 +162,9 @@ private struct SettingsView: View {
                 }
                 if let issue = selected.issue(in: model.catalog.devices, direction: direction) { Text(issue).font(.caption) }
                 if selected.lane1 != nil && selected.lane1 == selected.lane2 {
-                    Text("Both logical lanes explicitly use the same physical channel (mono duplication).")
+                    Text(direction == .input
+                        ? "Both logical lanes explicitly use the same physical input channel (mono duplication)."
+                        : "Both output lanes sum into one physical channel. Full-level inputs can clip.")
                         .font(.caption)
                 }
             }.padding(6).disabled(!model.canEditSelections)

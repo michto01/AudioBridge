@@ -2,7 +2,7 @@
 
 ## Working method
 
-Implement in small, reviewable vertical slices. Codex must compile and run relevant tests after each slice, record commands/results, and stop to report blockers rather than papering over missing SDK or hardware. Do not generate a large untested application in one pass.
+Implement in small, reviewable vertical slices. Codex must compile and run relevant tests after each slice, record commands/results, and stop to report blockers rather than papering over missing SDK or hardware. Do not generate a large untested application in one pass. Current user instruction defers automated test execution and live audio checks: tests may be written and documented, but unrun gates remain pending.
 
 ## Phase 0 — Repository and environment
 
@@ -18,7 +18,7 @@ Implementation status: shell and build workflow implemented; see [actual Phase 0
 
 ## Phase 1 — Device discovery and permission probe
 
-Implementation status: device catalog, listeners, UID/channel persistence, permission UI and diagnostics export implemented. Built-in and virtual endpoints probed. See [actual Phase 1 results](phase-1-results.md). Packaged permission interaction, physical reconnect and external USB validation remain pending. Stop before Phase 2.
+Implementation status: device catalog, listeners, UID/channel persistence, permission UI and diagnostics export implemented. Built-in and virtual endpoints probed. See [actual Phase 1 results](phase-1-results.md). User confirmed settings persistence and granted permission, and authorized continuing. Physical reconnect and external USB validation remain deferred, not passed.
 
 - Enumerate input/output devices with names, stable UIDs, channel counts, nominal sample rates and supported buffer sizes.
 - Observe device arrival/removal; show missing device status; persist selection by UID.
@@ -28,6 +28,8 @@ Implementation status: device catalog, listeners, UID/channel persistence, permi
 **Gate:** correct discovery and permission UX on the user's Mac; no silent fallback.
 
 ## Phase 2 — Minimal audio path
+
+Implementation status: experimental manual HAL input/output path, C callback ownership, bounded stereo FIFO and Float32 layout normalization implemented. Compiled and packaged; new automated tests written but not run. Live audio checks deferred at user request. Integer PCM, multiple streams and same-device duplex routing remain prerequisites for broader compatibility. See [Phase 2 results](phase-2-results.md). Stop for review before Phase 3; the audio acceptance gate remains pending.
 
 - Implement independent HAL capture/output, safe callback lifecycle and a preallocated FIFO.
 - Support a verified internal PCM representation and explicitly convert device formats.

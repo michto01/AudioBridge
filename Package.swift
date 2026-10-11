@@ -11,8 +11,10 @@ let package = Package(
     targets: [
         .target(name: "AudioBridgeCore"),
         .target(name: "AudioBridgeDiscovery", dependencies: ["AudioBridgeCore"]),
-        .executableTarget(name: "AudioBridge", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery"]),
+        .target(name: "AudioBridgeRealtime", linkerSettings: [.linkedFramework("CoreAudio")]),
+        .target(name: "AudioBridgeEngine", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeRealtime"]),
+        .executableTarget(name: "AudioBridge", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeEngine"]),
         .executableTarget(name: "AudioBridgeProbe", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery"]),
-        .testTarget(name: "AudioBridgeCoreTests", dependencies: ["AudioBridgeCore"])
+        .testTarget(name: "AudioBridgeCoreTests", dependencies: ["AudioBridgeCore", "AudioBridgeEngine", "AudioBridgeRealtime"])
     ]
 )

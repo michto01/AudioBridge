@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **Phase 0 accepted by user testing; Phase 1 discovery and permission UI implemented, hardware/permission acceptance pending. Audio routing is not implemented.**
+Status: **Phase 0 accepted; Phase 1 settings persistence and permission confirmed by user. Phase 2 experimental audio path implemented and compiled; automated tests and live audio acceptance deferred at user request.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 processes two selected input channels into two selected output channels using a configurable 2×2 matrix. No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 
@@ -30,17 +30,19 @@ make release
 make clean
 ```
 
-The app has a native menu-bar popover and separate settings scene. Phase 1 discovers real Core Audio devices, persists explicitly selected UIDs and physical channels, observes device/property changes and provides a microphone permission button. Start is disabled and meters are unavailable. No capture, login registration or routing occurs. Closing settings does not quit the app; use Quit in the popover.
+The app has a native menu-bar popover and separate settings scene. It discovers real Core Audio devices, persists explicitly selected UIDs and physical channels, observes device/property changes and provides a microphone permission button. Phase 2 adds manual Start/Stop for experimental identity routing at 0 dB. Meters, drift correction, rate conversion, automatic recovery and login registration are not implemented. Closing settings does not quit the app; use Quit in the popover.
 
-Run the current build with `make DIST_DIR=/tmp/AudioBridge-phase1 run`. In Settings → Audio, choose both endpoints and both physical lanes explicitly. Choosing the same physical channel twice explicitly configures mono duplication for a future engine. Device selection never changes macOS default devices or sample rates. A missing endpoint or invalidated channel selection stays saved and is shown as unavailable.
+Run the current build with `make DIST_DIR=/tmp/AudioBridge-phase2 run`. Quit an older running copy first. In Settings → Audio, choose both endpoints and both physical lanes explicitly, then press Start when ready for an attended check. This initial path requires two separate devices, matching current sample rates and one packed native-endian Float32 PCM stream per selected direction. Planar and interleaved layouts are normalized to internal stereo Float32; unsupported formats are rejected with a reason. These temporary restrictions are not the universal v1 compatibility contract. Duplicate input channels copy into both lanes; duplicate output channels sum both lanes and can clip. Device selection never changes macOS default devices or sample rates. A missing endpoint or invalidated channel selection stays saved and is shown as unavailable.
+
+The FIFO does **not** compensate independently clocked devices: even at equal nominal rates, buffers may eventually overrun or underrun. This build is not ready for unattended streaming. Nothing captures automatically on launch. Start requests are checked against a fresh UID catalog; device loss or format changes stop this experimental path without fallback or automatic retry. Settings show human-readable device names; technical UIDs remain in Diagnostics.
 
 Settings → Diagnostics shows actual stream formats and property errors and exports a JSON report including permission context. `make probe` runs the same read-only catalog as a CLI. CLI microphone authorization is **not evidence of packaged-app authorization**; request/check permission in Settings → Audio. Raw local diagnostic snapshots under `.diagnostics/` are ignored by Git and contain no audio samples.
 
 Artifacts normally go to `dist/AudioBridge.app`. `make run` packages and ad-hoc signs before launching. `make release` builds the release configuration, signs, verifies and creates a ZIP with a SHA-256 checksum. Ad-hoc signing does not provide Developer ID trust or notarization. `make clean` clears SwiftPM build products and retains distribution artifacts for review.
 
-File Provider storage on the development machine attaches Finder metadata that can invalidate bundle signing. Use local output storage for reliable packaging, for example `make DIST_DIR=/tmp/AudioBridge-phase0 run` and `make DIST_DIR=/tmp/AudioBridge-phase0 release`. Temporary artifacts are disposable, not a stable deployment path. Tests automatically use isolated temporary build storage and remove it afterward. Packaging refuses to replace a bundle with another identifier or a symlink. There are no third-party dependencies, extra entitlements or embedded resources in Phase 0.
+File Provider storage on the development machine attaches Finder metadata that can invalidate bundle signing. Use local output storage for reliable packaging, for example `make DIST_DIR=/tmp/AudioBridge-phase2 run` and `make DIST_DIR=/tmp/AudioBridge-phase2 release`. Temporary artifacts are disposable, not a stable deployment path. Tests automatically use isolated temporary build storage and remove it afterward. Packaging refuses to replace a bundle with another identifier or a symlink. There are no third-party dependencies or extra entitlements. Packaging converts `Resources/AudioBridge.png` into a complete `AudioBridge.icns` family using Apple's `sips` and `iconutil` and includes it in the app bundle.
 
-See [Phase 0 results](docs/phase-0-results.md) and [Phase 1 results](docs/phase-1-results.md) for actual checks and remaining acceptance steps.
+See [Phase 0 results](docs/phase-0-results.md), [Phase 1 results](docs/phase-1-results.md) and [Phase 2 results and deferred checks](docs/phase-2-results.md) for actual checks and remaining acceptance steps.
 
 ## Decisions already locked
 
