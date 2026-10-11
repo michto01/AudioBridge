@@ -15,7 +15,8 @@ let package = Package(
         .target(name: "AudioBridgeRealtime", linkerSettings: [.linkedFramework("CoreAudio")]),
         .target(name: "AudioBridgeAU", linkerSettings: [.linkedFramework("AudioToolbox")]),
         .target(name: "AudioBridgeEngine", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeRealtime", "AudioBridgeAU"]),
-        .executableTarget(name: "AudioBridgeAUWorker", dependencies: ["AudioBridgeAU", "AudioBridgeRealtime"]),
+        .target(name: "AudioBridgeAUViews", cSettings: [.unsafeFlags(["-fobjc-arc"])], linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("AudioToolbox")]),
+        .executableTarget(name: "AudioBridgeAUWorker", dependencies: ["AudioBridgeAU", "AudioBridgeRealtime", "AudioBridgeAUViews"]),
         .executableTarget(name: "AudioBridge", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeEngine", "AudioBridgeAU"]),
         .executableTarget(name: "AudioBridgeProbe", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery"]),
         .testTarget(name: "AudioBridgeCoreTests", dependencies: ["AudioBridgeCore", "AudioBridgeEngine", "AudioBridgeRealtime", "AudioBridgeAU"])

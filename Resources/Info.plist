@@ -7,8 +7,8 @@
     <key>CFBundleDisplayName</key><string>Audio Bridge</string>
     <key>CFBundleIconFile</key><string>AudioBridge.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.3</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.2.4</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Audio Bridge captures audio from your explicitly selected input device to route it to your selected output device.</string>

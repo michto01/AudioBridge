@@ -4,6 +4,28 @@ import Foundation
 
 /// Read-only HAL discovery. Never opens IO, sets formats, or changes defaults.
 public enum CoreAudioCatalog {
+    public static func bufferIsSettable(_ id: UInt32) -> Bool {
+        var property = address(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        var settable: DarwinBoolean = false
+        return AudioObjectIsPropertySettable(id, &property, &settable) == noErr && settable.boolValue
+    }
+
+    /// Explicit user command only; a device-wide change can affect other audio applications.
+    public static func setBufferFrames(uid: String, frames: UInt32) throws -> UInt32 {
+        guard let device = try snapshot().devices.first(where: { $0.uid == uid }), device.alive == true,
+              let range = device.bufferFrameRange, range.minimum.isFinite, range.maximum.isFinite,
+              Double(frames) >= range.minimum, Double(frames) <= range.maximum,
+              bufferIsSettable(device.runtimeID) else {
+            throw ProbeError.invalid("Selected device is unavailable or its buffer size is not writable/in range.")
+        }
+        guard try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+            throw ProbeError.invalid("Device identity changed; refresh and try again.")
+        }
+        var property = address(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        var value = frames
+        try check(AudioObjectSetPropertyData(device.runtimeID, &property, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value), device.runtimeID, property.mSelector)
+        return try scalar(device.runtimeID, kAudioDevicePropertyBufferFrameSize, initial: UInt32(0))
+    }
     public static func snapshot() throws -> CatalogSnapshot {
         let ids: [UInt32] = try values(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
         var devices: [DeviceFacts] = []

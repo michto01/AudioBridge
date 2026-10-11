@@ -179,6 +179,7 @@ private struct SettingsView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if let device {
+                    DeviceBufferControl(model: model, device: device).id(device.uid)
                     Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz · buffer \(device.bufferFrames.map(String.init) ?? "unknown") frames")
                         .font(.caption)
                     if let range = device.bufferFrameRange {

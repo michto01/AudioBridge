@@ -29,6 +29,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
     @Published private(set) var auEditorOpen = false
+    @Published private(set) var writableBuffers: Set<String> = []
+    @Published private(set) var changingDeviceBuffer = false
+    @Published private(set) var deviceBufferMessage: String?
     private var auEditor: Process?
     private var auEditorDirectory: URL?
     private let engine = AudioBridgeEngine()
@@ -40,11 +43,12 @@ final class AppModel: ObservableObject {
     private var observation: CatalogObservation?
     private var pendingRefresh = false
     private var canSave = true
-    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen }
+    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen && !changingDeviceBuffer }
     var canStartRouting: Bool {
         startUnavailableReason == nil
     }
     var startUnavailableReason: String? {
+        if changingDeviceBuffer { return "Applying audio interface buffer size…" }
         if routingRequested || routingTransitioning { return "Stop routing before starting a new route." }
         if !canSave { return "Saved configuration needs attention before routing can start." }
         if let inputIssue { return inputIssue }
@@ -243,7 +247,10 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func addAU(_ listing: AUListing) {
-        var next = auChain; next.effects.append(AUEffect(identity: listing.id, name: listing.name)); updateAUChain(next)
+        guard canEditSelections else { return }
+        let effect = AUEffect(identity: listing.id, name: listing.name)
+        var next = auChain; next.effects.append(effect); updateAUChain(next)
+        if auChain.effects.contains(where: { $0.id == effect.id }) { editAU(effect) }
     }
     func setAUEnabled(_ enabled: Bool, id: UUID) {
         var next = auChain
@@ -304,8 +311,10 @@ final class AppModel: ObservableObject {
         refreshing = true
         probeQueue.async { [weak self] in
             let result = Result { try CoreAudioCatalog.snapshot() }
+            let writable = (try? result.get().devices.filter { CoreAudioCatalog.bufferIsSettable($0.runtimeID) }.map(\.uid)) ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.writableBuffers = Set(writable)
                 switch result {
                 case .success(let snapshot):
                     var icons: [String: NSImage] = [:]
@@ -325,6 +334,22 @@ final class AppModel: ObservableObject {
                 }
                 self.refreshing = false
                 if self.pendingRefresh { self.pendingRefresh = false; self.refresh() }
+            }
+        }
+    }
+    func setDeviceBuffer(uid: String, frames: UInt32) {
+        guard canEditSelections else { return }
+        changingDeviceBuffer = true; deviceBufferMessage = nil
+        probeQueue.async { [weak self] in
+            let result = Result { try CoreAudioCatalog.setBufferFrames(uid: uid, frames: frames) }
+            Task { @MainActor in
+                guard let self else { return }
+                self.changingDeviceBuffer = false
+                switch result {
+                case .success(let actual): self.deviceBufferMessage = "Interface buffer: \(actual) frames (requested \(frames))."
+                case .failure(let error): self.deviceBufferMessage = "Interface buffer change failed: \(error)"
+                }
+                self.refresh()
             }
         }
     }

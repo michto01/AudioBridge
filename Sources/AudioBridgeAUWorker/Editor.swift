@@ -1,4 +1,6 @@
 import AppKit
+import AVFAudio
+import AudioBridgeAUViews
 import AudioBridgeAU
 import AudioToolbox
 import CoreAudioKit
@@ -10,11 +12,12 @@ final class Editor: NSObject, NSWindowDelegate {
     private var effect: AUEffect
     private let output: URL
     private var unit: AUAudioUnit?
+    private var wrapper: AVAudioUnit?
     private var window: NSWindow?
     private var loadTimer: Timer?
     init(effect: AUEffect, output: URL) { self.effect = effect; self.output = output }
     static func launch(input: URL, output: URL) {
-        NSApplication.shared.setActivationPolicy(.accessory)
+        NSApplication.shared.setActivationPolicy(.regular)
         do {
             let effect = try JSONDecoder().decode(AUEffect.self, from: Data(contentsOf: input))
             let editor = Editor(effect: effect, output: output); retained = editor; editor.open()
@@ -32,9 +35,18 @@ final class Editor: NSObject, NSWindowDelegate {
         }
         Task { [self] in
             do {
-                let unit = try await instantiate(effect); try restore(effect, unit: unit)
+                let wrapper: AVAudioUnit = try await withCheckedThrowingContinuation { continuation in
+                    AVAudioUnit.instantiate(with: effect.identity.description, options: []) { unit, error in
+                        if let unit { continuation.resume(returning: unit) }
+                        else { continuation.resume(throwing: error ?? AUError("Unable to load effect editor.")) }
+                    }
+                }
+                self.wrapper = wrapper
+                let unit = wrapper.auAudioUnit; try restore(effect, unit: unit)
                 self.unit = unit; loadTimer?.invalidate(); loadTimer = nil
-                window.contentView = NSHostingView(rootView: EffectEditor(unit: unit, save: { [weak self] in self?.save() }))
+                let legacy = ABCreateCocoaEditor(wrapper.audioUnit, NSSize(width: 660, height: 440))
+                window.contentView = NSHostingView(rootView: EffectEditor(unit: unit, legacy: legacy, save: { [weak self] in self?.save() }))
+                window.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps: true)
             } catch { loadTimer?.invalidate(); showError(error.localizedDescription) }
         }
     }
@@ -55,6 +67,7 @@ final class Editor: NSObject, NSWindowDelegate {
 @MainActor
 private struct EffectEditor: View {
     let unit: AUAudioUnit
+    let legacy: NSView?
     let save: () -> Void
     @State private var native: NSViewController?
     @State private var requested = false
@@ -67,7 +80,12 @@ private struct EffectEditor: View {
                 Button("Cancel") { NSApplication.shared.terminate(nil) }
             }
             Text("Changes apply on the next Start; this editor does not audition audio.").font(.caption).foregroundStyle(.secondary)
-            if let native { NativeEditor(controller: native) }
+            if let legacy {
+                ScrollView([.horizontal, .vertical]) {
+                    LegacyEditor(view: legacy).frame(width: max(400, legacy.frame.width), height: max(300, legacy.frame.height))
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            else if let native { NativeEditor(controller: native).frame(minWidth: 400, minHeight: 300).frame(maxWidth: .infinity, maxHeight: .infinity) }
             else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
@@ -89,10 +107,15 @@ private struct EffectEditor: View {
             }
         }.padding()
         .onAppear {
-            guard !requested else { return }; requested = true
+            guard !requested, legacy == nil else { return }; requested = true
             unit.requestViewController { controller in Task { @MainActor in native = controller } }
         }
     }
+}
+private struct LegacyEditor: NSViewRepresentable {
+    let view: NSView
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ view: NSView, context: Context) {}
 }
 private struct NativeEditor: NSViewControllerRepresentable {
     let controller: NSViewController
