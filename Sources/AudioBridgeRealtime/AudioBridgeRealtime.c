@@ -109,6 +109,13 @@ struct ABEngine {
     ABGainRamp inputGain, outputGain;
     uint32_t rampFrames;
     ABAUTransport *au;
+    ABResampler *resampler;
+    ABDriftController drift;
+    double sampleRate, driftTarget;
+    uint32_t inputBuffer;
+    _Atomic uint32_t driftPPMBits, matrixTarget[4], matrixVersion;
+    _Atomic uint64_t recenterFrames, rebufferEvents;
+    ABGainRamp matrix[4];
 };
 
 bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport) {
@@ -118,6 +125,42 @@ bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport) {
 
 static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
 static float bits_float(uint32_t bits) { float value; memcpy(&value, &bits, sizeof(value)); return value; }
+bool ABEngineConfigureDrift(ABEngine *engine, double rate, uint32_t inputBuffer) {
+    if (!engine || engine->inputProc || engine->outputProc || !isfinite(rate) || rate <= 0 || !inputBuffer) return false;
+    engine->sampleRate = rate; engine->inputBuffer = inputBuffer;
+    engine->driftTarget = engine->prefill + ABResamplerLookahead() + inputBuffer * 0.5;
+    return true;
+}
+void ABEngineSetMatrix(ABEngine *engine, float a, float b, float c, float d) {
+    float values[4] = { a, b, c, d };
+    if (!engine) return;
+    for (int i = 0; i < 4; i++) if (!isfinite(values[i]) || values[i] < 0 || values[i] > 1) return;
+    atomic_fetch_add_explicit(&engine->matrixVersion, 1, memory_order_seq_cst);
+    for (int i = 0; i < 4; i++) atomic_store_explicit(&engine->matrixTarget[i], float_bits(values[i]), memory_order_seq_cst);
+    atomic_fetch_add_explicit(&engine->matrixVersion, 1, memory_order_seq_cst);
+    if (!engine->inputProc && !engine->outputProc) {
+        for (int i = 0; i < 4; i++) engine->matrix[i] = (ABGainRamp){ .current = values[i], .target = values[i] };
+    }
+}
+static uint32_t source_read(void *context, float *samples, uint32_t frames) {
+    ABEngine *engine = context;
+    return engine->au ? ABAUOutputRead(engine->au, samples, frames) : ABRingRead(engine->ring, samples, frames);
+}
+static void apply_matrix(ABEngine *engine, float *samples, uint32_t frames) {
+    uint32_t version = atomic_load_explicit(&engine->matrixVersion, memory_order_seq_cst);
+    float targets[4];
+    for (int i = 0; i < 4; i++) targets[i] = bits_float(atomic_load_explicit(&engine->matrixTarget[i], memory_order_seq_cst));
+    if (!(version & 1) && version == atomic_load_explicit(&engine->matrixVersion, memory_order_seq_cst)) {
+        for (int i = 0; i < 4; i++) if (targets[i] != engine->matrix[i].target) ABGainRetarget(&engine->matrix[i], targets[i], engine->rampFrames);
+    }
+    for (uint32_t frame = 0; frame < frames; frame++) {
+        float a = ABGainNext(&engine->matrix[0]), b = ABGainNext(&engine->matrix[1]);
+        float c = ABGainNext(&engine->matrix[2]), d = ABGainNext(&engine->matrix[3]);
+        float left = samples[frame * 2], right = samples[frame * 2 + 1];
+        samples[frame * 2] = a * left + b * right;
+        samples[frame * 2 + 1] = c * left + d * right;
+    }
+}
 void ABEngineSetGains(ABEngine *engine, float input, float output) {
     if (!engine || !isfinite(input) || !isfinite(output) || input < 0 || input > 4 || output < 0 || output > 4) return;
     atomic_store_explicit(&engine->inputGainTarget, float_bits(input), memory_order_relaxed);
@@ -227,11 +270,22 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
         if (buffer_frames(output, engine->outputLayout, &frames) && frames <= engine->scratchFrames) {
             ABLevels levels = {0};
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
-                && (engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring)) >= engine->prefill)
+                && (engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring)) >= engine->prefill + ABResamplerLookahead())
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
-                uint32_t read = engine->au ? ABAUOutputRead(engine->au, engine->outputScratch, frames)
-                    : ABRingRead(engine->ring, engine->outputScratch, frames);
+                ABAUTransportMetrics queued = engine->au ? ABAUTransportSnapshot(engine->au) : (ABAUTransportMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
+                // Clock balance includes both sides of the asynchronous AU worker.
+                double ratio = ABDriftStep(&engine->drift, (double)queued.inputFrames + queued.outputFrames,
+                    engine->driftTarget, engine->sampleRate, frames);
+                atomic_store_explicit(&engine->driftPPMBits, float_bits((float)engine->drift.ppm), memory_order_relaxed);
+                if (queued.outputFrames > engine->scratchFrames * 9 / 10) {
+                    uint32_t discard = queued.outputFrames - engine->prefill - ABResamplerLookahead();
+                    uint32_t removed = source_read(engine, engine->outputScratch, discard);
+                    atomic_fetch_add_explicit(&engine->recenterFrames, removed, memory_order_relaxed);
+                    ABResamplerReset(engine->resampler);
+                }
+                uint32_t read = ABResamplerProcess(engine->resampler, source_read, engine, engine->outputScratch, frames, ratio);
+                apply_matrix(engine, engine->outputScratch, frames);
                 apply_gain(engine->outputScratch, frames, &engine->outputGain,
                     bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
                 for (uint32_t i = 0; i < frames; ++i) {
@@ -247,6 +301,13 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 levels = ABMeasureStereo(engine->outputScratch, frames);
                 atomic_fetch_add_explicit(&engine->outputFrames, read, memory_order_relaxed);
                 atomic_fetch_add_explicit(&engine->underrunFrames, frames - read, memory_order_relaxed);
+                if (read < frames || ABResamplerStarved(engine->resampler)) {
+                    atomic_store_explicit(&engine->primed, false, memory_order_release);
+                    atomic_fetch_add_explicit(&engine->rebufferEvents, 1, memory_order_relaxed);
+                    engine->drift.filtered = engine->driftTarget;
+                }
+            } else if (atomic_load_explicit(&engine->rebufferEvents, memory_order_relaxed) > 0) {
+                atomic_fetch_add_explicit(&engine->underrunFrames, frames, memory_order_relaxed);
             }
             publish_levels(engine, levels, false);
         } else atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
@@ -261,6 +322,7 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, ABLayout inp
     ABEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) return NULL;
     engine->ring = ABRingCreate(capacity);
+    engine->resampler = ABResamplerCreate();
     engine->inputScratch = calloc((size_t)capacity * 2, sizeof(float));
     engine->outputScratch = calloc((size_t)capacity * 2, sizeof(float));
     engine->scratchFrames = capacity; engine->prefill = prefill;
@@ -280,7 +342,14 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, ABLayout inp
     engine->inputGain = (ABGainRamp){ .current = 1, .target = 1 };
     engine->outputGain = (ABGainRamp){ .current = 1, .target = 1 };
     engine->rampFrames = 960;
-    if (!engine->ring || !engine->inputScratch || !engine->outputScratch
+    engine->sampleRate = 48000; engine->inputBuffer = 512; engine->driftTarget = prefill + 17 + 256;
+    atomic_init(&engine->driftPPMBits, 0); atomic_init(&engine->matrixVersion, 0); atomic_init(&engine->recenterFrames, 0); atomic_init(&engine->rebufferEvents, 0);
+    for (int i = 0; i < 4; i++) {
+        float value = (i == 0 || i == 3) ? 1 : 0;
+        atomic_init(&engine->matrixTarget[i], float_bits(value));
+        engine->matrix[i] = (ABGainRamp){ .current = value, .target = value };
+    }
+    if (!engine->ring || !engine->resampler || !engine->inputScratch || !engine->outputScratch
         || !atomic_is_lock_free(&engine->enabled) || !atomic_is_lock_free(&engine->primed)
         || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)
         || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)) {
@@ -334,7 +403,7 @@ bool ABEngineDestroy(ABEngine *engine) {
     (void)ABEngineStop(engine);
     if (engine->inputProc || engine->outputProc || atomic_load_explicit(&engine->inFlight, memory_order_acquire))
         return false; // Keep callbacks context alive on failed unregister/teardown.
-    ABRingDestroy(engine->ring); free(engine->inputScratch); free(engine->outputScratch); free(engine);
+    ABRingDestroy(engine->ring); ABResamplerDestroy(engine->resampler); free(engine->inputScratch); free(engine->outputScratch); free(engine);
     return true;
 }
 ABMetrics ABEngineMetrics(const ABEngine *engine) {
@@ -355,5 +424,8 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     result.outputLevels.clips2 = atomic_load_explicit(&engine->outputClips2, memory_order_relaxed);
     result.rawInputClips1 = atomic_load_explicit(&engine->rawInputClips1, memory_order_relaxed);
     result.rawInputClips2 = atomic_load_explicit(&engine->rawInputClips2, memory_order_relaxed);
+    result.driftPPM = bits_float(atomic_load_explicit(&engine->driftPPMBits, memory_order_relaxed));
+    result.recenterFrames = atomic_load_explicit(&engine->recenterFrames, memory_order_relaxed);
+    result.rebufferEvents = atomic_load_explicit(&engine->rebufferEvents, memory_order_relaxed);
     return result;
 }

@@ -15,7 +15,7 @@ struct SignalMeters: View {
                 let level = levels?[lane]
                 let db = level?.decibels ?? -.infinity
                 HStack(spacing: 8) {
-                    Text(direction == .input ? "In \(lane + 1)" : (lane == 0 ? "Out L" : "Out R"))
+                    Text("\(direction == .input ? "In" : "Out") \(lane + 1)")
                         .font(.caption).frame(width: 40, alignment: .leading)
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
@@ -81,11 +81,13 @@ struct BufferSettings: View {
                             }
                             Button("Apply preset") { model.setBufferProfile(model.bufferProfile) }
                         }.disabled(!model.canEditSelections)
-                        Text("Minimum follows the larger device buffer, at least 16 frames. Small values are experimental and can underrun. Interface buffers are changed separately. Stop before changing; no drift correction or measured latency guarantee.")
+                        Text("Minimum follows the larger device buffer, at least 16 frames. FIR conversion adds 17 frames of lookahead. Small targets can underrun; stop before changing. No measured latency guarantee.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 4)
                 }
                 if model.routingRequested, let metrics = model.engineSnapshot {
+                    Text("Drift correction: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm · rebuffers \(metrics.rebufferEvents) · recentered \(metrics.recenterFrames) frames")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Text("\(metrics.bufferedFrames) / \(metrics.capacity) frames · \(metrics.primed ? "Ready" : "Filling") · underrun \(metrics.underrunFrames) · overrun \(metrics.overrunFrames)")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }

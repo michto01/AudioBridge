@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var customBufferFrames: UInt32?
     @Published private(set) var inputTrim: Double = 0
     @Published private(set) var outputGain: Double = 0
+    @Published private(set) var matrix = ChannelMatrix.identity
     @Published private(set) var auChain = AUChain()
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
@@ -78,6 +79,13 @@ final class AppModel: ObservableObject {
 
     init() {
         let preferences = UserDefaults.standard
+        if let data = preferences.data(forKey: "AudioBridge.matrix") {
+            do {
+                let saved = try JSONDecoder().decode(ChannelMatrix.self, from: data)
+                guard saved.isValid else { throw AUError("Invalid saved channel matrix.") }
+                matrix = saved
+            } catch { self.error = "Saved matrix requires attention; existing data retained."; canSave = false }
+        }
         if let data = preferences.data(forKey: "AudioBridge.auCatalogCache"), data.count <= 8 * 1024 * 1024 {
             do {
                 let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate()
@@ -113,6 +121,9 @@ final class AppModel: ObservableObject {
         if routingFault != nil { return "Action required" }
         if routingTransitioning { return routingRequested ? "Starting" : "Stopping" }
         if routingRequested {
+            if let snapshot = engineSnapshot, !snapshot.primed, snapshot.rebufferEvents > 0 {
+                return "Rebuffering — waiting for audio"
+            }
             guard let snapshot = engineSnapshot, snapshot.primed,
                   snapshot.inputCallbacks > 0, snapshot.outputCallbacks > 0,
                   snapshot.outputFrames > 0 else { return "Starting — waiting for callbacks" }
@@ -171,7 +182,7 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, updated: { [weak self] snapshot in
+                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, matrix: matrix, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -249,6 +260,13 @@ final class AppModel: ObservableObject {
         if direction == .input { inputTrim = decibels } else { outputGain = decibels }
         UserDefaults.standard.set(decibels, forKey: direction == .input ? "AudioBridge.inputTrim" : "AudioBridge.outputGain")
         engine.setGains(inputTrim: inputTrim, outputGain: outputGain)
+    }
+    func setMatrix(_ next: ChannelMatrix) {
+        guard canSave, next.isValid else { return }
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(next), forKey: "AudioBridge.matrix")
+            matrix = next; engine.setMatrix(next)
+        } catch { self.error = "Unable to save channel matrix: \(error.localizedDescription)" }
     }
     var routePlan: Phase2Plan? {
         try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile, bufferFrames: customBufferFrames)

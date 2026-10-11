@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "AUTransport.h"
+#include "AdaptiveDSP.h"
 
 typedef struct ABRing ABRing;
 ABRing *ABRingCreate(uint32_t capacity);
@@ -40,6 +41,8 @@ typedef struct {
     uint32_t bufferedFrames;
     bool primed;
     ABLevels inputLevels, outputLevels;
+    float driftPPM;
+    uint64_t recenterFrames, rebufferEvents;
     uint64_t rawInputClips1, rawInputClips2;
 } ABMetrics;
 
@@ -54,6 +57,8 @@ bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport);
 // Initial gain is configured only before callback registration; live updates are atomic.
 void ABEngineInitialGains(ABEngine *engine, float input, float output, uint32_t rampFrames);
 void ABEngineSetGains(ABEngine *engine, float input, float output);
+bool ABEngineConfigureDrift(ABEngine *engine, double sampleRate, uint32_t inputBuffer);
+void ABEngineSetMatrix(ABEngine *engine, float a, float b, float c, float d);
 OSStatus ABEngineStop(ABEngine *engine);
 // Returns false and retains memory if HAL cannot detach callbacks safely.
 bool ABEngineDestroy(ABEngine *engine);

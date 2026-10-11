@@ -14,7 +14,7 @@ struct AudioBridgeApp: App {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.headline)
                 Label(model.status, systemImage: "info.circle")
-                Text("Experimental routing. Drift correction is not implemented.").foregroundStyle(.secondary)
+                Text("Experimental adaptive routing; hardware validation pending.").foregroundStyle(.secondary)
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
@@ -67,7 +67,7 @@ private struct SettingsView: View {
         TabView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Experimental routing. Drift correction and rate conversion are not implemented; use for attended checks only.")
+                    Text("Experimental adaptive routing and matrix. Recovery is not implemented; use for attended checks only.")
                         .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
@@ -82,6 +82,7 @@ private struct SettingsView: View {
                     endpointPicker(.input)
                     endpointPicker(.output)
                     AUEffectsView(model: model)
+                    MatrixSettings(model: model)
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -99,7 +100,7 @@ private struct SettingsView: View {
                     if model.routingRequested || model.routingTransitioning {
                         Text("Stop routing to change devices or channels.").font(.caption)
                     }
-                    Text("Matrix, drift correction and login controls are not yet implemented.")
+                    Text("Automatic recovery and login controls are not yet implemented.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }.tabItem { Label("Audio", systemImage: "waveform") }
@@ -117,7 +118,8 @@ private struct SettingsView: View {
                         Text("Captured / rendered frames: \(metrics.inputFrames) / \(metrics.outputFrames)")
                         Text("FIFO: \(metrics.bufferedFrames) frames · prefill complete: \(metrics.primed ? "yes" : "no")")
                         Text("Underrun / overrun frames: \(metrics.underrunFrames) / \(metrics.overrunFrames) · format faults: \(metrics.formatFaults)")
-                        Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · drift correction: not implemented")
+                        Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · correction: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm")
+                        Text("Rebuffer events: \(metrics.rebufferEvents) · recentered frames discarded: \(metrics.recenterFrames)")
                         Text("Input clipped samples: \(metrics.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                         Text("Output clipped samples: \(metrics.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                         Text("Raw input full-scale samples: \(metrics.rawInputClips.map(String.init).joined(separator: " / "))")
@@ -147,7 +149,7 @@ private struct SettingsView: View {
             }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.title2)
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 2 experimental audio path")
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 3 experimental audio path")
                 Text("The bridge does not record or transmit audio. Third-party Audio Units run separately and control their own behavior.")
             }.padding().tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -184,7 +186,7 @@ private struct SettingsView: View {
                     channelPicker(direction, lane: 2, channels: device?.facts(for: direction).physicalChannels ?? [])
                 }.disabled(!model.canEditSelections)
                 if direction == .input, device?.input.physicalChannels.count == 1 {
-                    Button("Use mono input in both lanes") { model.duplicateMonoInput() }
+                    Button("Use mono input for In 1 and In 2") { model.duplicateMonoInput() }
                         .disabled(!model.canEditSelections)
                 }
                 GainControl(model: model, direction: direction)
@@ -204,8 +206,8 @@ private struct SettingsView: View {
                 if let issue = selected.issue(in: model.catalog.devices, direction: direction) { Text(issue).font(.caption) }
                 if selected.lane1 != nil && selected.lane1 == selected.lane2 {
                     Text(direction == .input
-                        ? "Both logical lanes explicitly use the same physical input channel (mono duplication)."
-                        : "Both output lanes sum into one physical channel. Full-level inputs can clip.")
+                        ? "In 1 and In 2 use the same physical input channel (mono duplication)."
+                        : "Out 1 and Out 2 sum into one physical channel. Full-level inputs can clip.")
                         .font(.caption)
                 }
             }.padding(6)
@@ -214,7 +216,7 @@ private struct SettingsView: View {
     private func channelPicker(_ direction: AudioDirection, lane: Int, channels: [Int]) -> some View {
         let selection = model.endpoint(direction)
         let channel = (lane == 1 ? selection.lane1 : selection.lane2) ?? 0
-        return Picker("Lane \(lane)", selection: Binding(
+        return Picker("\(direction == .input ? "In" : "Out") \(lane)", selection: Binding(
             get: { let selected = model.endpoint(direction); return (lane == 1 ? selected.lane1 : selected.lane2) ?? 0 },
             set: { model.selectChannel($0, lane: lane, direction: direction) }
         )) {

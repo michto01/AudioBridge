@@ -26,6 +26,9 @@ public struct EngineSnapshot: Sendable {
     public let auLatencySeconds: Float
     public let auProcessedFrames: UInt64
     public let auResponse: AULiveResponse?
+    public let driftPPM: Float
+    public let recenterFrames: UInt64
+    public let rebufferEvents: UInt64
 }
 
 public struct MeterLevel: Sendable {
@@ -57,7 +60,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, matrix: ChannelMatrix = .identity,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -72,6 +75,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next
+                guard matrix.isValid, ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift or matrix configuration.") }
+                ABEngineSetMatrix(created, Float(matrix.a), Float(matrix.b), Float(matrix.c), Float(matrix.d))
                 do {
                     guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
                     auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass, cancelled: { [self] in
@@ -112,6 +117,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             ABEngineSetGains(context, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain))
         }
     }
+    public func setMatrix(_ matrix: ChannelMatrix) {
+        guard matrix.isValid else { return }
+        queue.async { [self] in
+            guard let context else { return }
+            ABEngineSetMatrix(context, Float(matrix.a), Float(matrix.b), Float(matrix.c), Float(matrix.d))
+        }
+    }
     public func auCommand(_ command: AULiveCommand, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         queue.async { [self] in
             do {
@@ -147,7 +159,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         if let auFault = auHost?.fault() { fault = auFault }
         if metrics.formatFaults > 0 { fault = "Audio buffer layout changed or became invalid. Refresh devices and start again." }
         else if elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
-            || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true) || !metrics.primed) {
+            || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
+            || (!metrics.primed && metrics.rebufferEvents == 0)) {
             fault = "Selected devices are not delivering confirmed callbacks and buffers. Check devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
@@ -182,7 +195,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             inputActive: inputActive, outputActive: outputActive && metrics.primed,
             capacity: plan.capacity, targetFrames: plan.prefill,
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
-            auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse)
+            auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse,
+            driftPPM: metrics.driftPPM, recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {
