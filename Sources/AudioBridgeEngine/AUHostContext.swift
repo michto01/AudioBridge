@@ -13,15 +13,17 @@ final class AUHostContext {
     var latencySeconds: Float { transport.map { ABAUTransportSnapshot($0).latencySeconds } ?? 0 }
     var processedFrames: UInt64 { transport.map { ABAUTransportSnapshot($0).processedFrames } ?? 0 }
 
-    init(chain: AUChain, plan: Phase2Plan, cancelled: () -> Bool) throws {
+    init(chain: AUChain, plan: Phase2Plan, bypass: Bool = false, cancelled: () -> Bool) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
             try chain.validate()
             let name = "/abau" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(22)
-            guard let mapping = ABAUTransportCreate(String(name), plan.capacity) else { throw AUError("Cannot allocate AU shared memory.") }
+            guard let mapping = ABAUTransportCreate(String(name), plan.capacity) else {
+                throw AUError("Cannot allocate AU shared memory: \(String(cString: ABAUTransportLastError())).")
+            }
             transport = mapping
-            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: 256)
+            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: 256, bypass: bypass)
             let configuration = directory.appendingPathComponent("request.json")
             try JSONEncoder().encode(request).write(to: configuration, options: .atomic)
             process.executableURL = Self.workerURL
@@ -49,7 +51,33 @@ final class AUHostContext {
         }
         return URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("AudioBridgeAUWorker")
     }
+    private var pending: AULiveCommand?
+    func bypass(_ value: Bool) throws {
+        guard let transport else { throw AUError("AU shared memory unavailable.") }
+        ABAUTransportSetBypass(transport, value)
+    }
+    func closeEditor() throws {
+        try Data().write(to: directory.appendingPathComponent("close-editor"), options: .atomic)
+    }
+    private var pendingSince: Double = 0
+    private(set) var response: AULiveResponse?
+    func command(_ command: AULiveCommand) throws {
+        guard pending == nil, process.isRunning else { throw AUError("AU helper is busy or unavailable.") }
+        try JSONEncoder().encode(command).write(to: directory.appendingPathComponent("command.json"), options: .atomic)
+        pending = command; pendingSince = ProcessInfo.processInfo.systemUptime; response = nil
+    }
+    private func pollResponse() {
+        guard let pending else { return }
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("response.json")), data.count <= 16 * 1024 * 1024,
+           let reply = try? JSONDecoder().decode(AULiveResponse.self, from: data), reply.id == pending.id {
+            response = reply; self.pending = nil
+        }
+    }
     func fault() -> String? {
+        pollResponse()
+        if let pending, pending.edit == nil, ProcessInfo.processInfo.systemUptime - pendingSince > 30 {
+            return "Live AU update timed out; routing stopped without bypassing the requested chain."
+        }
         guard let transport else { return "AU shared memory is unavailable." }
         let facts = ABAUTransportSnapshot(transport)
         if facts.fault != 0 { return "AU render failed (OSStatus \(facts.fault)); routing stopped without bypassing the chain." }

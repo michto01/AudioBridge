@@ -15,6 +15,9 @@ final class Editor: NSObject, NSWindowDelegate {
     private var wrapper: AVAudioUnit?
     private var window: NSWindow?
     private var loadTimer: Timer?
+    private var liveCompletion: ((AUEffect?, String?) -> Void)?
+    private var sizeObservation: NSObjectProtocol?
+    private var lastEditorSize = NSSize.zero
     init(effect: AUEffect, output: URL) { self.effect = effect; self.output = output }
     static func launch(input: URL, output: URL) {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -23,6 +26,13 @@ final class Editor: NSObject, NSWindowDelegate {
             let editor = Editor(effect: effect, output: output); retained = editor; editor.open()
         } catch { exit(2) }
     }
+    static func showLive(effect: AUEffect, wrapper: AVAudioUnit, completion: @escaping (AUEffect?, String?) -> Void) {
+        NSApplication.shared.setActivationPolicy(.regular)
+        let editor = Editor(effect: effect, output: URL(fileURLWithPath: "/dev/null"))
+        editor.wrapper = wrapper; editor.unit = wrapper.auAudioUnit; editor.liveCompletion = completion
+        retained = editor; editor.open()
+    }
+    static func closeLive() { if retained?.liveCompletion != nil { retained?.save() } }
     private func open() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -30,6 +40,7 @@ final class Editor: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: Text("Loading effect…").padding())
         window.center(); window.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps: true)
+        if let wrapper { install(wrapper); return }
         loadTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.showError("AU editor timed out while loading. Close this window and inspect the plugin installation.") }
         }
@@ -44,11 +55,34 @@ final class Editor: NSObject, NSWindowDelegate {
                 self.wrapper = wrapper
                 let unit = wrapper.auAudioUnit; try restore(effect, unit: unit)
                 self.unit = unit; loadTimer?.invalidate(); loadTimer = nil
-                let legacy = ABCreateCocoaEditor(wrapper.audioUnit, NSSize(width: 660, height: 440))
-                window.contentView = NSHostingView(rootView: EffectEditor(unit: unit, legacy: legacy, save: { [weak self] in self?.save() }))
-                window.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps: true)
+                install(wrapper)
             } catch { loadTimer?.invalidate(); showError(error.localizedDescription) }
         }
+    }
+    private func install(_ wrapper: AVAudioUnit) {
+        let legacy = ABCreateCocoaEditor(wrapper.audioUnit, .zero)
+        window?.contentView = NSHostingView(rootView: EffectEditor(unit: wrapper.auAudioUnit, legacy: legacy,
+            live: liveCompletion != nil, fit: { [weak self] in self?.fit($0) }, save: { [weak self] in self?.save() }))
+        if let legacy {
+            fit(legacy)
+            DispatchQueue.main.async { [weak self, weak legacy] in if let legacy { self?.fit(legacy) } }
+            legacy.postsFrameChangedNotifications = true
+            sizeObservation = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+                object: legacy, queue: .main) { [weak self, weak legacy] _ in
+                MainActor.assumeIsolated { if let legacy { self?.fit(legacy) } }
+            }
+        }
+        window?.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+    private func fit(_ view: NSView) {
+        let fitting = view.fittingSize
+        let size = NSSize(width: max(view.frame.width, fitting.width), height: max(view.frame.height, fitting.height))
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size != lastEditorSize, let window else { return }
+        lastEditorSize = size
+        let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        window.setContentSize(NSSize(width: min(max(440, size.width + 32), screen.width - 40),
+            height: min(max(350, size.height + 110), screen.height - 80)))
     }
     private func showError(_ message: String) { window?.contentView = NSHostingView(rootView: Text(message).padding()) }
     private func save() {
@@ -57,17 +91,28 @@ final class Editor: NSObject, NSWindowDelegate {
                 effect.state = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
                 guard effect.state!.count <= 8 * 1024 * 1024 else { throw AUError("Plugin state exceeds the 8 MB limit.") }
             }
-            try JSONEncoder().encode(effect).write(to: output, options: .atomic)
-            NSApplication.shared.terminate(nil)
+            if let liveCompletion {
+                self.liveCompletion = nil
+                if let sizeObservation { NotificationCenter.default.removeObserver(sizeObservation); self.sizeObservation = nil }
+                window?.delegate = nil; window?.close()
+                liveCompletion(effect, nil); Self.retained = nil
+            } else {
+                try JSONEncoder().encode(effect).write(to: output, options: .atomic)
+                NSApplication.shared.terminate(nil)
+            }
         } catch { showError(error.localizedDescription) }
     }
-    func windowWillClose(_ notification: Notification) { NSApplication.shared.terminate(nil) }
+    func windowWillClose(_ notification: Notification) {
+        if liveCompletion != nil { save() } else { NSApplication.shared.terminate(nil) }
+    }
 }
 
 @MainActor
 private struct EffectEditor: View {
     let unit: AUAudioUnit
     let legacy: NSView?
+    let live: Bool
+    let fit: (NSView) -> Void
     let save: () -> Void
     @State private var native: NSViewController?
     @State private var requested = false
@@ -76,10 +121,10 @@ private struct EffectEditor: View {
             HStack {
                 Text(unit.audioUnitName ?? "Audio Unit").font(.headline)
                 Spacer()
-                Button("Save settings") { save() }
-                Button("Cancel") { NSApplication.shared.terminate(nil) }
+                Button(live ? "Close and save" : "Save settings") { save() }
+                if !live { Button("Cancel") { NSApplication.shared.terminate(nil) } }
             }
-            Text("Changes apply on the next Start; this editor does not audition audio.").font(.caption).foregroundStyle(.secondary)
+            Text(live ? "Controls affect the running effect immediately. Close saves settings." : "Changes apply on the next Start.").font(.caption).foregroundStyle(.secondary)
             if let legacy {
                 ScrollView([.horizontal, .vertical]) {
                     LegacyEditor(view: legacy).frame(width: max(400, legacy.frame.width), height: max(300, legacy.frame.height))
@@ -108,7 +153,17 @@ private struct EffectEditor: View {
         }.padding()
         .onAppear {
             guard !requested, legacy == nil else { return }; requested = true
-            unit.requestViewController { controller in Task { @MainActor in native = controller } }
+            unit.requestViewController { controller in
+                Task { @MainActor in
+                    native = controller
+                    if let controller {
+                        let preferred = controller.preferredContentSize
+                        if preferred.width > 0, preferred.height > 0,
+                           preferred.width.isFinite, preferred.height.isFinite { controller.view.setFrameSize(preferred) }
+                        fit(controller.view)
+                    }
+                }
+            }
         }
     }
 }

@@ -51,6 +51,8 @@ User-authorized preliminary slices: local signal meters, compact FIFO buffer set
 
 User-authorized AU extension: installed effect catalog, persisted ordered chain, separate editor/render helper, and trim controls above meters implemented. See [AU hosting results](au-hosting-results.md). This expands the original DSP scope but does not pass Phase 3–5 gates or establish unattended readiness.
 
+Follow-up: live chain insertion/removal, same-instance parameter editing, automatic editor sizing and whole-chain bypass implemented; see [live AU results](live-au-results.md). Runtime acceptance, transition behavior and the reported allocation failure remain unverified.
+
 - Build supervisor state machine with desired-vs-observed state, bounded backoff and UID-driven reconnection.
 - Implement menu-bar popover, settings window, diagnostics and configuration migration.
 - Implement login item via `SMAppService` as appropriate for app packaging and installation method.

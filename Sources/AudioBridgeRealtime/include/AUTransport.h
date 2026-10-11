@@ -11,11 +11,14 @@ typedef struct {
     float latencySeconds;
 } ABAUTransportMetrics;
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity);
+const char *ABAUTransportLastError(void);
 ABAUTransport *ABAUTransportOpen(const char *name);
 void ABAUTransportUnlink(ABAUTransport *transport);
 void ABAUTransportClose(ABAUTransport *transport);
 void ABAUTransportShutdown(ABAUTransport *transport);
 void ABAUTransportReady(ABAUTransport *transport, float latency);
+void ABAUTransportSetBypass(ABAUTransport *transport, bool bypass);
+bool ABAUTransportBypassed(const ABAUTransport *transport);
 void ABAUTransportFault(ABAUTransport *transport, int32_t fault);
 void ABAUTransportHeartbeat(ABAUTransport *transport);
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *transport);

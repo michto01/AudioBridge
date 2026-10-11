@@ -6,13 +6,21 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
 
-#define AB_SHARED_VERSION 1
+static _Thread_local char transport_error[256];
+const char *ABAUTransportLastError(void) { return transport_error; }
+static void failure(const char *operation, int code) {
+    snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
+}
+
+#define AB_SHARED_VERSION 2
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
 typedef struct {
     uint32_t version, capacity;
-    _Atomic bool ready, stopped;
+    _Atomic bool ready, stopped, bypass;
     _Atomic int32_t fault;
     _Atomic uint32_t latency;
     _Atomic uint64_t heartbeat, processedFrames;
@@ -26,29 +34,35 @@ static bool valid_atomics(Shared *s) {
         && atomic_is_lock_free(&s->input.write) && atomic_is_lock_free(&s->output.read);
 }
 static ABAUTransport *map_transport(const char *name, bool create, uint32_t capacity) {
-    if (!name || name[0] != '/' || strlen(name) >= 32) return NULL;
-    if (create && (capacity < 2 || capacity > AB_SHARED_CAPACITY || (capacity & (capacity - 1)))) return NULL;
+    transport_error[0] = 0;
+    if (!name || name[0] != '/' || strlen(name) >= 32) { failure("shared-memory name", EINVAL); return NULL; }
+    if (create && (capacity < 2 || capacity > AB_SHARED_CAPACITY || (capacity & (capacity - 1)))) { failure("queue capacity", EINVAL); return NULL; }
     int fd = shm_open(name, create ? O_CREAT | O_EXCL | O_RDWR : O_RDWR, 0600);
-    if (fd < 0) return NULL;
-    if (create && ftruncate(fd, sizeof(Shared)) != 0) { close(fd); shm_unlink(name); return NULL; }
+    if (fd < 0) { failure("shm_open", errno); return NULL; }
+    long page = sysconf(_SC_PAGESIZE);
+    size_t mappedSize = page > 0 ? ((sizeof(Shared) + page - 1) / page) * page : sizeof(Shared);
+    if (create && ftruncate(fd, mappedSize) != 0) { failure("ftruncate", errno); close(fd); shm_unlink(name); return NULL; }
     struct stat facts;
-    if (fstat(fd, &facts) != 0 || facts.st_size != sizeof(Shared)) { close(fd); if (create) shm_unlink(name); return NULL; }
+    if (fstat(fd, &facts) != 0) { failure("fstat", errno); close(fd); if (create) shm_unlink(name); return NULL; }
+    if (facts.st_size < sizeof(Shared) || facts.st_size > mappedSize) { failure("mapping size", EINVAL); close(fd); if (create) shm_unlink(name); return NULL; }
     Shared *s = mmap(NULL, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    int mapError = errno;
     close(fd);
-    if (s == MAP_FAILED) { if (create) shm_unlink(name); return NULL; }
+    if (s == MAP_FAILED) { failure("mmap", mapError); if (create) shm_unlink(name); return NULL; }
     if (create) {
         memset(s, 0, sizeof(*s)); s->version = AB_SHARED_VERSION; s->capacity = capacity;
         atomic_init(&s->ready, false); atomic_init(&s->stopped, false); atomic_init(&s->fault, 0);
+        atomic_init(&s->bypass, false);
         atomic_init(&s->latency, 0); atomic_init(&s->heartbeat, 0); atomic_init(&s->processedFrames, 0);
         atomic_init(&s->input.write, 0); atomic_init(&s->input.read, 0);
         atomic_init(&s->output.write, 0); atomic_init(&s->output.read, 0);
     }
     if (s->version != AB_SHARED_VERSION || s->capacity < 2 || s->capacity > AB_SHARED_CAPACITY
         || (s->capacity & (s->capacity - 1)) || !valid_atomics(s)) {
-        munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL;
+        failure("shared header or lock-free atomics", EINVAL); munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL;
     }
     ABAUTransport *transport = calloc(1, sizeof(*transport));
-    if (!transport) { munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL; }
+    if (!transport) { failure("transport allocation", ENOMEM); munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL; }
     transport->shared = s; transport->owner = create; strcpy(transport->name, name);
     return transport;
 }
@@ -57,6 +71,8 @@ ABAUTransport *ABAUTransportOpen(const char *name) { return map_transport(name, 
 void ABAUTransportUnlink(ABAUTransport *t) { if (t && t->owner) { shm_unlink(t->name); t->owner = false; } }
 void ABAUTransportClose(ABAUTransport *t) { if (t) { ABAUTransportUnlink(t); munmap(t->shared, sizeof(Shared)); free(t); } }
 void ABAUTransportShutdown(ABAUTransport *t) { atomic_store_explicit(&t->shared->stopped, true, memory_order_release); }
+void ABAUTransportSetBypass(ABAUTransport *t, bool bypass) { atomic_store_explicit(&t->shared->bypass, bypass, memory_order_release); }
+bool ABAUTransportBypassed(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->bypass, memory_order_acquire); }
 void ABAUTransportReady(ABAUTransport *t, float latency) {
     uint32_t bits; memcpy(&bits, &latency, sizeof(bits)); atomic_store(&t->shared->latency, bits);
     atomic_store_explicit(&t->shared->ready, true, memory_order_release);

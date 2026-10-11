@@ -29,6 +29,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
     @Published private(set) var auEditorOpen = false
+    @Published private(set) var auUpdating = false
+    @Published private(set) var chainBypassed = false
+    private var pendingAU: AULiveCommand?
+    private var editAfterUpdate: UUID?
+    private var liveEditor = false
+    var canEditAU: Bool { canSave && !routingTransitioning && !changingDeviceBuffer && !auEditorOpen && !auUpdating }
     @Published private(set) var writableBuffers: Set<String> = []
     @Published private(set) var changingDeviceBuffer = false
     @Published private(set) var deviceBufferMessage: String?
@@ -43,12 +49,13 @@ final class AppModel: ObservableObject {
     private var observation: CatalogObservation?
     private var pendingRefresh = false
     private var canSave = true
-    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen && !changingDeviceBuffer }
+    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen && !changingDeviceBuffer && !auUpdating }
     var canStartRouting: Bool {
         startUnavailableReason == nil
     }
     var startUnavailableReason: String? {
         if changingDeviceBuffer { return "Applying audio interface buffer size…" }
+        if selectedBufferFrames < 256 { return "Live AU hosting needs at least 256 startup buffer frames." }
         if routingRequested || routingTransitioning { return "Stop routing before starting a new route." }
         if !canSave { return "Saved configuration needs attention before routing can start." }
         if let inputIssue { return inputIssue }
@@ -68,6 +75,7 @@ final class AppModel: ObservableObject {
 
     init() {
         let preferences = UserDefaults.standard
+        chainBypassed = preferences.bool(forKey: "AudioBridge.chainBypassed")
         if let saved = preferences.data(forKey: "AudioBridge.auChain") {
             do { auChain = try JSONDecoder().decode(AUChain.self, from: saved); try auChain.validate() }
             catch { self.error = "Saved AU chain could not be read: \(error.localizedDescription). Existing data retained."; canSave = false }
@@ -154,11 +162,27 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, updated: { [weak self] snapshot in
+                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
+                if let response = snapshot.auResponse, response.id == self.pendingAU?.id {
+                    self.pendingAU = nil; self.auUpdating = false
+                    if self.liveEditor { self.liveEditor = false; self.auEditorOpen = false }
+                    if let error = response.error { self.error = "Live AU change failed: \(error)" }
+                    if let effect = response.effect, let index = self.auChain.effects.firstIndex(where: { $0.id == effect.id && $0.identity == effect.identity }) {
+                        var next = self.auChain; next.effects[index].state = effect.state
+                        do {
+                            try next.validate(); UserDefaults.standard.set(try JSONEncoder().encode(next), forKey: "AudioBridge.auChain"); self.auChain = next
+                        } catch { self.error = "Unable to save live AU settings: \(error.localizedDescription)" }
+                    }
+                    if response.error == nil, let id = self.editAfterUpdate,
+                       let effect = self.auChain.effects.first(where: { $0.id == id }) {
+                        self.editAfterUpdate = nil; self.editAU(effect)
+                    } else { self.editAfterUpdate = nil }
+                }
                 if let fault = snapshot.fault {
+                    self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
                     self.routingRequested = false
                     UserDefaults.standard.set(false, forKey: "AudioBridge.desiredRouting")
                     self.routingFault = fault
@@ -180,6 +204,8 @@ final class AppModel: ObservableObject {
         })
     }
     func stopRouting() {
+        pendingAU = nil; auUpdating = false; editAfterUpdate = nil
+        if liveEditor { liveEditor = false; auEditorOpen = false }
         // Persist deliberate Stop before acknowledging it; no retry or reconnect can override it.
         UserDefaults.standard.set(false, forKey: "AudioBridge.desiredRouting")
         routingGeneration &+= 1
@@ -201,7 +227,7 @@ final class AppModel: ObservableObject {
         customBufferFrames = nil
         UserDefaults.standard.removeObject(forKey: "AudioBridge.bufferFrames")
     }
-    var bufferMinimum: UInt32 { max(auChain.active.isEmpty ? 16 : 256, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
+    var bufferMinimum: UInt32 { max(256, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
     var bufferMaximum: UInt32 { 32768 }
     var selectedBufferFrames: UInt32 { customBufferFrames ?? bufferProfile.targetFrames(deviceBuffer: min(4096, bufferMinimum)) }
     func setBufferFrames(_ frames: UInt32) {
@@ -239,18 +265,21 @@ final class AppModel: ObservableObject {
         }
     }
     func updateAUChain(_ chain: AUChain) {
-        guard canEditSelections, !auEditorOpen else { return }
+        guard canEditAU else { return }
         do {
             try chain.validate()
             UserDefaults.standard.set(try JSONEncoder().encode(chain), forKey: "AudioBridge.auChain")
             auChain = chain
+            if routingRequested { sendAU(AULiveCommand(chain: chain)) }
         } catch { self.error = error.localizedDescription }
     }
     func addAU(_ listing: AUListing) {
-        guard canEditSelections else { return }
+        guard canEditAU else { return }
         let effect = AUEffect(identity: listing.id, name: listing.name)
-        var next = auChain; next.effects.append(effect); updateAUChain(next)
-        if auChain.effects.contains(where: { $0.id == effect.id }) { editAU(effect) }
+        var next = auChain; next.effects.append(effect)
+        if routingRequested { editAfterUpdate = effect.id }
+        updateAUChain(next)
+        if !routingRequested, auChain.effects.contains(where: { $0.id == effect.id }) { editAU(effect) }
     }
     func setAUEnabled(_ enabled: Bool, id: UUID) {
         var next = auChain
@@ -264,7 +293,11 @@ final class AppModel: ObservableObject {
         next.effects.swapAt(index, index + offset); updateAUChain(next)
     }
     func editAU(_ effect: AUEffect) {
-        guard canEditSelections, !auEditorOpen else { return }
+        guard canEditAU else { return }
+        if routingRequested {
+            liveEditor = true; auEditorOpen = true
+            sendAU(AULiveCommand(edit: effect.id)); return
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-editor-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -299,10 +332,43 @@ final class AppModel: ObservableObject {
         } catch { try? FileManager.default.removeItem(at: directory); self.error = "Unable to open AU editor: \(error.localizedDescription)" }
     }
     func cancelAUEditor() {
+        if liveEditor {
+            engine.auControl(closeEditor: true) { [weak self] result in
+                Task { @MainActor in if case .failure(let error) = result { self?.error = error.localizedDescription } }
+            }
+            return
+        }
         guard let process = auEditor, process.isRunning else { return }
         process.terminate()
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
             if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        }
+    }
+    private func sendAU(_ command: AULiveCommand) {
+        pendingAU = command; auUpdating = command.edit == nil
+        engine.auCommand(command) { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.pendingAU?.id == command.id else { return }
+                if case .failure(let error) = result {
+                    self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
+                    self.editAfterUpdate = nil; self.error = error.localizedDescription
+                    self.stopRouting(); self.routingFault = "Live AU change could not be applied: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    func setChainBypassed(_ bypass: Bool) {
+        guard !routingTransitioning else { return }
+        chainBypassed = bypass
+        UserDefaults.standard.set(bypass, forKey: "AudioBridge.chainBypassed")
+        if routingRequested {
+            engine.auControl(bypass: bypass) { [weak self] result in
+                Task { @MainActor in
+                    if case .failure(let error) = result {
+                        self?.stopRouting(); self?.routingFault = "Chain bypass could not be applied: \(error.localizedDescription)"
+                    }
+                }
+            }
         }
     }
     func refresh() {

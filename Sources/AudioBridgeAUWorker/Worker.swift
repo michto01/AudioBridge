@@ -45,10 +45,14 @@ final class PullSource {
 }
 
 final class Stage {
+    let effect: AUEffect
+    let wrapper: AVAudioUnit
     let unit: AUAudioUnit
     let render: AURenderBlock
     let pull: PullSource
-    init(unit: AUAudioUnit, input: UnsafeMutablePointer<Float>, frames: UInt32) {
+    init(effect: AUEffect, wrapper: AVAudioUnit, input: UnsafeMutablePointer<Float>, frames: UInt32) {
+        self.effect = effect; self.wrapper = wrapper
+        let unit = wrapper.auAudioUnit
         self.unit = unit; render = unit.renderBlock; pull = PullSource(samples: input, frames: frames)
         _ = pull.block // Cache before render resources / processing.
     }
@@ -64,6 +68,7 @@ final class Renderer: @unchecked Sendable {
     let list: UnsafeMutableAudioBufferListPointer
     var stages: [Stage] = []
     var sampleTime: Double = 0
+    var latencySeconds: Float = 0
 
     init(transport: OpaquePointer, frames: UInt32) {
         self.transport = transport; self.frames = frames
@@ -80,7 +85,13 @@ final class Renderer: @unchecked Sendable {
         }
         var latency: Double = 0
         for effect in request.chain.active {
-            let unit = try await instantiate(effect)
+            let wrapper: AVAudioUnit = try await withCheckedThrowingContinuation { continuation in
+                AVAudioUnit.instantiate(with: effect.identity.description, options: []) { unit, error in
+                    if let unit { continuation.resume(returning: unit) }
+                    else { continuation.resume(throwing: error ?? AUError("Unable to load \(effect.name).")) }
+                }
+            }
+            let unit = wrapper.auAudioUnit
             try restore(effect, unit: unit)
             guard unit.inputBusses.count >= 1, unit.outputBusses.count >= 1 else {
                 throw AUError("\(effect.name) does not expose an audio input/output bus.")
@@ -96,27 +107,28 @@ final class Renderer: @unchecked Sendable {
             try unit.outputBusses[0].setFormat(format)
             unit.maximumFramesToRender = frames
             unit.isRenderingOffline = false
-            let stage = Stage(unit: unit, input: first, frames: frames)
+            let stage = Stage(effect: effect, wrapper: wrapper, input: first, frames: frames)
             try unit.allocateRenderResources()
             stages.append(stage)
             guard unit.latency.isFinite, unit.latency >= 0 else { throw AUError("Invalid plugin latency.") }
-            latency += unit.latency
+            if effect.enabled { latency += unit.latency }
+            unit.shouldBypassEffect = !effect.enabled
         }
         guard latency.isFinite, latency < Double(Float.greatestFiniteMagnitude) else { throw AUError("Invalid chain latency.") }
-        ABAUTransportReady(transport, Float(latency))
+        latencySeconds = Float(latency)
     }
-    func run() {
+    func processBlock(bypass: Bool = false) -> Bool {
         let count = Int(frames), bytes = UInt32(count * MemoryLayout<Float>.size)
-        while !ABAUTransportSnapshot(transport).stopped {
+        do {
             ABAUTransportHeartbeat(transport)
             guard ABAUTransportSnapshot(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
-                usleep(1000); continue // Helper only; HAL callbacks never wait.
+                usleep(1000); return true // Helper only; HAL callbacks never wait.
             }
-            guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return }
+            guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second
             var timestamp = AudioTimeStamp(); timestamp.mSampleTime = sampleTime; timestamp.mFlags = .sampleTimeValid
-            for stage in stages {
+            for stage in stages where !bypass {
                 stage.pull.samples = input
                 for lane in 0..<2 {
                     list[lane] = AudioBuffer(mNumberChannels: 1, mDataByteSize: bytes, mData: output.advanced(by: lane * count))
@@ -124,23 +136,24 @@ final class Renderer: @unchecked Sendable {
                 }
                 var flags = AudioUnitRenderActionFlags()
                 let status = stage.render(&flags, &timestamp, frames, 0, list.unsafeMutablePointer, stage.pull.block)
-                guard status == noErr else { fail(status); return }
-                guard list.unsafeMutablePointer.pointee.mNumberBuffers == 2 else { fail(kAudioUnitErr_FormatNotSupported); return }
+                guard status == noErr else { fail(status); return false }
+                guard list.unsafeMutablePointer.pointee.mNumberBuffers == 2 else { fail(kAudioUnitErr_FormatNotSupported); return false }
                 for lane in 0..<2 {
                     guard list[lane].mNumberChannels == 1, list[lane].mDataByteSize == bytes,
-                          let rendered = list[lane].mData else { fail(kAudioUnitErr_FormatNotSupported); return }
+                          let rendered = list[lane].mData else { fail(kAudioUnitErr_FormatNotSupported); return false }
                     memmove(output.advanced(by: lane * count), rendered, Int(bytes))
                 }
                 swap(&input, &output)
             }
             for i in 0..<count {
                 let a = input[i], b = input[count + i]
-                guard a.isFinite, b.isFinite else { fail(kAudioUnitErr_InvalidPropertyValue); return }
+                guard a.isFinite, b.isFinite else { fail(kAudioUnitErr_InvalidPropertyValue); return false }
                 scratch[i * 2] = a; scratch[i * 2 + 1] = b
             }
-            guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return }
+            guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
             sampleTime += Double(frames)
         }
+        return true
     }
     func fail(_ status: OSStatus) { ABAUTransportFault(transport, status) }
     deinit {
@@ -173,9 +186,7 @@ enum Worker {
                 try request.chain.validate()
                 let renderer = Renderer(transport: transport, frames: request.blockFrames)
                 try await renderer.prepare(request: request)
-                DispatchQueue.global(qos: .userInteractive).async {
-                    renderer.run(); ABAUTransportClose(renderer.transport); exit(0)
-                }
+                LiveHost(directory: URL(fileURLWithPath: args[3]).deletingLastPathComponent(), request: request, renderer: renderer).start()
             } catch {
                 ABAUTransportFault(transport, -1)
                 FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
@@ -183,7 +194,8 @@ enum Worker {
             }
         }
         withExtendedLifetime(parentWatch) {
-            RunLoop.main.run() // AU async instantiation and extension services require a live main run loop.
+            NSApplication.shared.setActivationPolicy(.accessory)
+            NSApplication.shared.run() // Dispatch AppKit events for editors of the running units.
         }
     }
 }

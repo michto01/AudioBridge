@@ -67,7 +67,21 @@ public struct AUWorkerRequest: Codable, Sendable {
     public let chain: AUChain
     public let sampleRate: Double
     public let blockFrames: UInt32
-    public init(chain: AUChain, sampleRate: Double, blockFrames: UInt32) {
-        self.chain = chain; self.sampleRate = sampleRate; self.blockFrames = blockFrames
+    public let bypass: Bool?
+    public init(chain: AUChain, sampleRate: Double, blockFrames: UInt32, bypass: Bool = false) {
+        self.chain = chain; self.sampleRate = sampleRate; self.blockFrames = blockFrames; self.bypass = bypass
     }
+}
+public struct AULiveCommand: Codable, Sendable {
+    public var id = UUID()
+    public let chain: AUChain?
+    public let edit: UUID?
+    public let bypass: Bool?
+    public init(chain: AUChain? = nil, edit: UUID? = nil, bypass: Bool? = nil) { self.chain = chain; self.edit = edit; self.bypass = bypass }
+}
+public struct AULiveResponse: Codable, Sendable {
+    public let id: UUID
+    public let effect: AUEffect?
+    public let error: String?
+    public init(id: UUID, effect: AUEffect? = nil, error: String? = nil) { self.id = id; self.effect = effect; self.error = error }
 }

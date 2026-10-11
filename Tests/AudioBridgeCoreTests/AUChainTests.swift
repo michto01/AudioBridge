@@ -6,6 +6,14 @@ import XCTest
 
 /// Deferred tests: no real plugin instantiation or hardware capture.
 final class AUChainTests: XCTestCase {
+    func testLiveCommandIdentityAndWholeChainBypass() throws {
+        let command = AULiveCommand(bypass: true)
+        let restored = try JSONDecoder().decode(AULiveCommand.self, from: JSONEncoder().encode(command))
+        XCTAssertEqual(restored.id, command.id)
+        XCTAssertEqual(restored.bypass, true)
+        XCTAssertNil(restored.edit)
+        XCTAssertNil(restored.chain)
+    }
     func testIdentityStateAndExplicitBypassPersist() throws {
         let identity = AUIdentity(type: kAudioUnitType_Effect, subtype: kAudioUnitSubType_PeakLimiter,
             manufacturer: kAudioUnitManufacturer_Apple)
@@ -36,6 +44,10 @@ final class AUChainTests: XCTestCase {
         defer { ABAUTransportClose(helper) }
         ABAUTransportUnlink(owner)
         ABAUTransportReady(helper, 0.01)
+        ABAUTransportSetBypass(owner, true)
+        XCTAssertTrue(ABAUTransportBypassed(helper))
+        ABAUTransportSetBypass(owner, false)
+        XCTAssertFalse(ABAUTransportBypassed(helper))
         XCTAssertTrue(ABAUTransportSnapshot(owner).ready)
         let signal: [Float] = [1, 0, 0, 0.5]
         XCTAssertEqual(signal.withUnsafeBufferPointer { ABAUCaptureWrite(owner, $0.baseAddress, 2) }, 2)

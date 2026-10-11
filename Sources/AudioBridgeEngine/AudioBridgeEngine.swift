@@ -25,6 +25,7 @@ public struct EngineSnapshot: Sendable {
     public let rawInputClips: [UInt64]
     public let auLatencySeconds: Float
     public let auProcessedFrames: UInt64
+    public let auResponse: AULiveResponse?
 }
 
 public struct MeterLevel: Sendable {
@@ -56,7 +57,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(),
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -71,9 +72,9 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next
-                if !effects.active.isEmpty {
+                do {
                     guard next.prefill >= 256 else { throw AUError("An AU chain needs at least 256 frames of bridge startup fill.") }
-                    auHost = try AUHostContext(chain: effects, plan: next, cancelled: { [self] in
+                    auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass, cancelled: { [self] in
                         self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
                     })
                     guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
@@ -109,6 +110,25 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         queue.async { [self] in
             guard let context else { return }
             ABEngineSetGains(context, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain))
+        }
+    }
+    public func auCommand(_ command: AULiveCommand, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        queue.async { [self] in
+            do {
+                guard let auHost else { throw AUError("AU helper is unavailable. Start routing first.") }
+                try auHost.command(command); completion(.success(()))
+            } catch { completion(.failure(error)) }
+        }
+    }
+    public func auControl(bypass: Bool? = nil, closeEditor: Bool = false,
+                          completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        queue.async { [self] in
+            do {
+                guard let auHost else { throw AUError("AU helper unavailable.") }
+                if let bypass { try auHost.bypass(bypass) }
+                if closeEditor { try auHost.closeEditor() }
+                completion(.success(()))
+            } catch { completion(.failure(error)) }
         }
     }
     private func poll(updated: @escaping @Sendable (EngineSnapshot) -> Void) {
@@ -148,6 +168,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         }
         let auLatency = auHost?.latencySeconds ?? 0
         let auFrames = auHost?.processedFrames ?? 0
+        let auResponse = auHost?.response
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)" }
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
@@ -161,7 +182,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             inputActive: inputActive, outputActive: outputActive && metrics.primed,
             capacity: plan.capacity, targetFrames: plan.prefill,
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
-            auLatencySeconds: auLatency, auProcessedFrames: auFrames)
+            auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {
