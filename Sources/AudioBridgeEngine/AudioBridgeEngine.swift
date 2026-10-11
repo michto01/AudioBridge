@@ -31,6 +31,21 @@ public struct EngineSnapshot: Sendable {
     public let rebufferEvents: UInt64
     public let physicalOutputPeak: Float
     public let physicalOutputClips: UInt64
+    public let captureQueueFrames: UInt32
+    public let processedQueueFrames: UInt32
+    public let auInFlightFrames: UInt32
+    public let auBlockFrames: UInt32
+    public let resamplerLookaheadFrames: UInt32
+    public let queueLowFrames: UInt64?
+    public let queueHighFrames: UInt64?
+    public let auRenderBlocks: UInt64
+    public let auRenderNanoseconds: UInt64
+    public let auLastRenderNanoseconds: UInt64
+    public let auMaxRenderNanoseconds: UInt64
+    public let delayInputDevice: DeviceFacts
+    public let delayOutputDevice: DeviceFacts
+    public let delaySelection: RouteSelection
+    public let chainBypassed: Bool
 }
 
 public struct MeterLevel: Sendable {
@@ -59,6 +74,11 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private var auHost: AUHostContext?
     private let preparationLock = NSLock()
     private var preparationCancelled = false
+    private var queueLowFrames: UInt64?
+    private var queueHighFrames: UInt64?
+    private var activeSelection = RouteSelection()
+    private var delayInputDevice: DeviceFacts?
+    private var delayOutputDevice: DeviceFacts?
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
@@ -76,7 +96,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     next.capacity, next.prefill) else {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
-                context = created; plan = next
+                context = created; plan = next; activeSelection = selection
+                delayInputDevice = next.input.device; delayOutputDevice = next.output.device
                 let routing = try Self.makeRouting(next, selection: selection)
                 guard ABEngineAttachRouting(created, routing) else { ABRoutingDestroy(routing); throw AUError("Unable to attach physical channel routing.") }
                 guard ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift configuration.") }
@@ -94,6 +115,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to start the selected devices (OSStatus \(status)). \(cleanup ?? "")")
                 }
                 startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
+                queueLowFrames = nil; queueHighFrames = nil
                 lastInputActivity = nil; lastOutputActivity = nil; lastDeviceCheck = .distantPast
                 let timer = DispatchSource.makeTimerSource(queue: queue)
                 watchdog = timer
@@ -155,6 +177,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     ABEngineSetRouting(context, i.baseAddress, UInt32(i.count / 2), o.baseAddress, UInt32(o.count / 2))
                 } }
                 guard applied else { throw AUError("Live routing publication failed.") }
+                activeSelection = selection
                 completion(.success(()))
             } catch { completion(.failure(error)) }
         }
@@ -213,14 +236,26 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             let output = fresh.devices.first { $0.uid == plan.output.device.uid }
             if input?.alive != true || output?.alive != true
                 || input?.runtimeID != plan.input.device.runtimeID || output?.runtimeID != plan.output.device.runtimeID
-                || input?.input != plan.input.device.input || output?.output != plan.output.device.output
+                || input?.input.matchesRoutingTopology(plan.input.device.input) != true
+                || output?.output.matchesRoutingTopology(plan.output.device.output) != true
+                || input?.bufferFrames != plan.input.device.bufferFrames || output?.bufferFrames != plan.output.device.bufferFrames
                 || input?.nominalSampleRate != plan.sampleRate || output?.nominalSampleRate != plan.sampleRate {
                 fault = "A selected device or its format changed. Routing stopped without choosing another device."
+            } else {
+                delayInputDevice = input; delayOutputDevice = output
             }
           } catch { fault = "Device recheck failed: \(error.localizedDescription)" }
         }
-        let auLatency = auHost?.latencySeconds ?? 0
-        let auFrames = auHost?.processedFrames ?? 0
+        let auMetrics = auHost?.metrics
+        let auLatency = auMetrics?.latencySeconds ?? 0
+        let auFrames = auMetrics?.processedFrames ?? 0
+        // Independently sampled queues: occupancy estimate, not a tagged-sample
+        // transit measurement. Include a block removed from capture but in flight.
+        let queued = UInt64(auMetrics?.inputFrames ?? 0) + UInt64(auMetrics?.outputFrames ?? 0) + UInt64(auMetrics?.inFlightFrames ?? 0)
+        if metrics.primed {
+            queueLowFrames = min(queueLowFrames ?? queued, queued)
+            queueHighFrames = max(queueHighFrames ?? queued, queued)
+        }
         let auResponse = auHost?.response
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)" }
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
@@ -237,7 +272,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
             auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse,
             driftPPM: metrics.driftPPM, recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
-            physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips)
+            physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,
+            captureQueueFrames: auMetrics?.inputFrames ?? 0, processedQueueFrames: auMetrics?.outputFrames ?? 0,
+            auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: plan.auBlockFrames,
+            resamplerLookaheadFrames: ABResamplerLookahead(), queueLowFrames: queueLowFrames, queueHighFrames: queueHighFrames,
+            auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
+            auLastRenderNanoseconds: auMetrics?.lastRenderNanoseconds ?? 0, auMaxRenderNanoseconds: auMetrics?.maxRenderNanoseconds ?? 0,
+            delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
+            chainBypassed: auMetrics?.bypassed ?? false)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {

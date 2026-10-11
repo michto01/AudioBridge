@@ -4,7 +4,7 @@ import SwiftUI
 struct DeviceBufferControl: View {
     @ObservedObject var model: AppModel
     let device: DeviceFacts
-    @State private var requested = 512
+    @State private var requested = 128
     @State private var custom = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -27,9 +27,9 @@ struct DeviceBufferControl: View {
                             TextField("Frames", value: $requested, format: .number.grouping(.never)).frame(width: 75)
                         }
                         Button("Apply") { model.setDeviceBuffer(uid: device.uid, frames: UInt32(requested)) }
-                            .disabled(requested < lower || requested > upper)
+                            .disabled(requested < lower || requested > upper || UInt32(clamping: requested) == device.bufferFrames)
                     }.disabled(!model.canEditSelections)
-                    Text("\(lower)–\(upper) frames · common sizes are suggestions; driver may round or reject. Stop to apply; affects other apps using this device.")
+                    Text("Current: \(device.bufferFrames.map(String.init) ?? "unknown") frames · 64/128 are low-buffer choices when supported. Driver may round or reject. Stop to apply; affects other apps using this device.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
@@ -37,7 +37,11 @@ struct DeviceBufferControl: View {
             }
             if let message = model.deviceBufferMessage { Text(message).font(.caption) }
         }
-        .onAppear { requested = Int(device.bufferFrames ?? 512) }
-        .onChange(of: device.bufferFrames) { _, frames in requested = Int(frames ?? 512); custom = !BufferFrameChoices.common.contains(requested) }
+        .onAppear { readCurrent() }
+        .onChange(of: device.bufferFrames) { _, _ in readCurrent() }
+    }
+    private func readCurrent() {
+        requested = BufferFrameChoices.initialRequest(current: device.bufferFrames, range: device.bufferFrameRange)
+        custom = !BufferFrameChoices.common.contains(requested)
     }
 }

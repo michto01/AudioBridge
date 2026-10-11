@@ -12,6 +12,7 @@ final class AUHostContext {
     private var lastHeartbeat = ProcessInfo.processInfo.systemUptime
     var latencySeconds: Float { transport.map { ABAUTransportSnapshot($0).latencySeconds } ?? 0 }
     var processedFrames: UInt64 { transport.map { ABAUTransportSnapshot($0).processedFrames } ?? 0 }
+    var metrics: ABAUTransportMetrics? { transport.map { ABAUTransportSnapshot($0) } }
 
     init(chain: AUChain, plan: Phase2Plan, bypass: Bool = false, cancelled: () -> Bool) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-\(UUID().uuidString)", isDirectory: true)

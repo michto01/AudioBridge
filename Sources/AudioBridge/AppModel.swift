@@ -607,6 +607,16 @@ final class AppModel: ObservableObject {
                 "Drift commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
                 "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
         } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }
+        if let s = engineSnapshot, let estimate = delayEstimate {
+            lines.append("Delay model: \(routingRequested ? "live" : "last run"); \(s.primed ? "primed" : "startup"); estimated allowances, not measured end-to-end")
+            for row in estimate.components {
+                let value = row.frames.map { "\($0) frames / \(estimate.milliseconds($0) ?? 0) ms" } ?? "unknown"
+                lines.append("Delay — \(row.label): \(value)")
+            }
+            lines.append("Delay known subtotal: \(estimate.milliseconds(estimate.knownFrames) ?? 0) ms; complete: \(estimate.complete)")
+            lines.append("Queue + in-flight min/max (primed 20 Hz samples): \(s.queueLowFrames.map(String.init) ?? "unknown") / \(s.queueHighFrames.map(String.init) ?? "unknown") frames")
+            lines.append("AU block: \(s.auBlockFrames) frames; timed blocks: \(s.auRenderBlocks); wall last/total/max: \(s.auLastRenderNanoseconds) / \(s.auRenderNanoseconds) / \(s.auMaxRenderNanoseconds) ns (separate from signal delay)")
+        }
         lines.append("Local diagnostics only; no audio samples or plugin state included.")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)

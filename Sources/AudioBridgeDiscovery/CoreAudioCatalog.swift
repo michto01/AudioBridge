@@ -122,18 +122,21 @@ public enum CoreAudioCatalog {
                 return list.map { RangedStreamFormat(format: format($0.mFormat), sampleRates: range($0.mSampleRateRange)) }
             } ?? []
             return StreamFacts(runtimeID: streamID, startingChannel: start, virtualFormat: virtual,
-                physicalFormat: physical, availableVirtualFormats: virtualFormats, availablePhysicalFormats: physicalFormats)
+                physicalFormat: physical, availableVirtualFormats: virtualFormats, availablePhysicalFormats: physicalFormats,
+                latencyFrames: streamRead("latency") { try scalar(streamID, kAudioStreamPropertyLatency, initial: UInt32(0)) })
         }
         return DirectionFacts(channelCount: channels.map { $0.reduce(0) { $0 + Int($1) } },
-            bufferChannelCounts: channels ?? [], preferredLayoutTag: layoutTag, channelLabels: labels, streams: streams)
+            bufferChannelCounts: channels ?? [], preferredLayoutTag: layoutTag, channelLabels: labels, streams: streams,
+            latencyFrames: channels?.isEmpty == false ? read("latency", { try scalar(id, kAudioDevicePropertyLatency, initial: UInt32(0), scope: scope) }) : nil,
+            safetyOffsetFrames: channels?.isEmpty == false ? read("safety offset", { try scalar(id, kAudioDevicePropertySafetyOffset, initial: UInt32(0), scope: scope) }) : nil)
     }
 
     private static func address(_ selector: UInt32, _ scope: UInt32) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
     }
     // Private generic helpers are called only with POD types from the SDK, never Swift references.
-    private static func scalar<T>(_ id: UInt32, _ selector: UInt32, initial: T) throws -> T {
-        var property = address(selector, kAudioObjectPropertyScopeGlobal)
+    private static func scalar<T>(_ id: UInt32, _ selector: UInt32, initial: T, scope: UInt32 = kAudioObjectPropertyScopeGlobal) throws -> T {
+        var property = address(selector, scope)
         var value = initial
         var size = UInt32(MemoryLayout<T>.size)
         let status = withUnsafeMutablePointer(to: &value) {

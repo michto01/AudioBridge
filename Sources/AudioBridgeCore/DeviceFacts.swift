@@ -56,13 +56,15 @@ public struct StreamFacts: Codable, Equatable, Sendable {
     public let physicalFormat: StreamFormat?
     public let availableVirtualFormats: [RangedStreamFormat]
     public let availablePhysicalFormats: [RangedStreamFormat]
+    public let latencyFrames: UInt32?
     public init(runtimeID: UInt32, startingChannel: UInt32?, virtualFormat: StreamFormat?,
                 physicalFormat: StreamFormat?, availableVirtualFormats: [RangedStreamFormat],
-                availablePhysicalFormats: [RangedStreamFormat]) {
+                availablePhysicalFormats: [RangedStreamFormat], latencyFrames: UInt32? = nil) {
         self.runtimeID = runtimeID; self.startingChannel = startingChannel
         self.virtualFormat = virtualFormat; self.physicalFormat = physicalFormat
         self.availableVirtualFormats = availableVirtualFormats
         self.availablePhysicalFormats = availablePhysicalFormats
+        self.latencyFrames = latencyFrames
     }
 }
 
@@ -72,6 +74,18 @@ public struct DirectionFacts: Codable, Equatable, Sendable {
     public let preferredLayoutTag: UInt32?
     public let channelLabels: [UInt32]
     public let streams: [StreamFacts]
+    public let latencyFrames: UInt32?
+    public let safetyOffsetFrames: UInt32?
+    /// Reported latency can change without invalidating callback topology.
+    public func matchesRoutingTopology(_ other: DirectionFacts) -> Bool {
+        channelCount == other.channelCount && bufferChannelCounts == other.bufferChannelCounts
+            && preferredLayoutTag == other.preferredLayoutTag && channelLabels == other.channelLabels
+            && streams.count == other.streams.count && zip(streams, other.streams).allSatisfy { a, b in
+                a.runtimeID == b.runtimeID && a.startingChannel == b.startingChannel
+                    && a.virtualFormat == b.virtualFormat && a.physicalFormat == b.physicalFormat
+                    && a.availableVirtualFormats == b.availableVirtualFormats && a.availablePhysicalFormats == b.availablePhysicalFormats
+            }
+    }
     /// Stream starting indices can be non-contiguous (observed on an aggregate).
     /// A channel count is not necessarily the largest physical index.
     public var physicalChannels: [Int] {
@@ -82,10 +96,12 @@ public struct DirectionFacts: Codable, Equatable, Sendable {
         })).sorted()
     }
     public init(channelCount: Int? = nil, bufferChannelCounts: [UInt32] = [],
-                preferredLayoutTag: UInt32? = nil, channelLabels: [UInt32] = [], streams: [StreamFacts] = []) {
+                preferredLayoutTag: UInt32? = nil, channelLabels: [UInt32] = [], streams: [StreamFacts] = [],
+                latencyFrames: UInt32? = nil, safetyOffsetFrames: UInt32? = nil) {
         self.channelCount = channelCount; self.bufferChannelCounts = bufferChannelCounts
         self.preferredLayoutTag = preferredLayoutTag; self.channelLabels = channelLabels
         self.streams = streams
+        self.latencyFrames = latencyFrames; self.safetyOffsetFrames = safetyOffsetFrames
     }
 }
 

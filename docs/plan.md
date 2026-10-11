@@ -47,6 +47,8 @@ User-authorized preliminary slices: local signal meters, compact FIFO buffer set
 - Add N×2 input matrix and stereo output fan-out, mono/stereo presets, smoothed gain, stereo mix/output peak meters and clipping indicators.
 - Implement latency profiles as documented tuning parameters, not unverified absolute promises.
 
+Playback/delay follow-up: 0.3.4/build 13 separates Playback, Audio, Routing and Effects controls. Reported device/stream/safety latency, sampled queues/in-flight occupancy, FIR lookahead and declared AU latency support an estimated accounting total. AU block last/mean/max wall time supports later CPU/deadline investigation, not physical transit measurement. Interface drafts preserve current driver values with 128-frame fallback only if unknown. See [results and deferred acceptance](playback-delay-results.md). Automated tests, actual delay, CPU and UI acceptance remain pending; this does not open Phase 4.
+
 **Gate:** drift simulations at positive/negative ppm, matrix unit tests, 1–2 hour preliminary hardware test with stable buffer occupancy.
 
 ## Phase 4 — Supervision and UI

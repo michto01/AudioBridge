@@ -68,23 +68,13 @@ private struct SettingsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
         TabView {
+            PlaybackView(model: model)
+                .tabItem { Label("Playback", systemImage: "play.circle") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Experimental routing · automatic recovery is not implemented.")
-                        .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
-                    if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
-                    RoutingStatusLabel(model: model).font(.headline)
-                    HStack {
-                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
-                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
-                    }
-                    if !model.routingRequested, let reason = model.startUnavailableReason {
-                        Text("Start unavailable: \(reason)").font(.caption).foregroundStyle(.secondary)
-                    }
                     endpointPicker(.input)
                     endpointPicker(.output)
-                    AUEffectsView(model: model)
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -108,15 +98,15 @@ private struct SettingsView: View {
             }.tabItem { Label("Audio", systemImage: "waveform") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    RoutingStatusLabel(model: model).font(.headline)
-                    HStack {
-                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
-                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
-                        Text("Patches and cell gains can change live.").font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text("Patches and cell gains can change live. Start/Stop is in Playback.").font(.caption).foregroundStyle(.secondary)
                     MatrixSettings(model: model)
                 }.padding()
             }.tabItem { Label("Routing", systemImage: "point.3.connected.trianglepath.dotted") }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    AUEffectsView(model: model)
+                }.padding()
+            }.tabItem { Label("Effects", systemImage: "slider.horizontal.3") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Launch at login and automatic routing are not yet implemented.")
                 Text("Device UIDs and explicit physical channels are saved on this Mac. A missing endpoint is never replaced with the system default.")
@@ -196,12 +186,6 @@ private struct SettingsView: View {
                         Text("Selected device unavailable").tag(uid)
                     }
                 }.disabled(!model.canEditSelections)
-                GainControl(model: model, direction: direction)
-                SignalMeters(model: model, direction: direction)
-                if direction == .input, let raw = model.engineSnapshot?.rawInputClips, raw.contains(where: { $0 > 0 }) {
-                    Text("Capture reached full scale during this run (signal level, not a routing fault).")
-                        .font(.caption).foregroundStyle(.orange)
-                }
                 if let device {
                     DeviceBufferControl(model: model, device: device).id(device.uid)
                     Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz · buffer \(device.bufferFrames.map(String.init) ?? "unknown") frames")

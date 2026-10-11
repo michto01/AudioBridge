@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <mach/mach_time.h>
 
 static _Thread_local char transport_error[256];
 const char *ABAUTransportLastError(void) { return transport_error; }
@@ -15,7 +16,7 @@ static void failure(const char *operation, int code) {
     snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
 }
 
-#define AB_SHARED_VERSION 2
+#define AB_SHARED_VERSION 3
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
 typedef struct {
@@ -24,13 +25,18 @@ typedef struct {
     _Atomic int32_t fault;
     _Atomic uint32_t latency;
     _Atomic uint64_t heartbeat, processedFrames;
+    _Atomic uint32_t inFlightFrames;
+    _Atomic uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
     SharedRing input, output;
 } Shared;
-struct ABAUTransport { Shared *shared; char name[32]; bool owner; };
+struct ABAUTransport { Shared *shared; char name[32]; bool owner; mach_timebase_info_data_t timebase; };
 
 static bool valid_atomics(Shared *s) {
     return atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
         && atomic_is_lock_free(&s->latency) && atomic_is_lock_free(&s->heartbeat)
+        && atomic_is_lock_free(&s->inFlightFrames) && atomic_is_lock_free(&s->renderBlocks)
+        && atomic_is_lock_free(&s->renderNanoseconds) && atomic_is_lock_free(&s->lastRenderNanoseconds)
+        && atomic_is_lock_free(&s->maxRenderNanoseconds)
         && atomic_is_lock_free(&s->input.write) && atomic_is_lock_free(&s->output.read);
 }
 static ABAUTransport *map_transport(const char *name, bool create, uint32_t capacity) {
@@ -54,6 +60,8 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
         atomic_init(&s->ready, false); atomic_init(&s->stopped, false); atomic_init(&s->fault, 0);
         atomic_init(&s->bypass, false);
         atomic_init(&s->latency, 0); atomic_init(&s->heartbeat, 0); atomic_init(&s->processedFrames, 0);
+        atomic_init(&s->inFlightFrames, 0); atomic_init(&s->renderBlocks, 0);
+        atomic_init(&s->renderNanoseconds, 0); atomic_init(&s->lastRenderNanoseconds, 0); atomic_init(&s->maxRenderNanoseconds, 0);
         atomic_init(&s->input.write, 0); atomic_init(&s->input.read, 0);
         atomic_init(&s->output.write, 0); atomic_init(&s->output.read, 0);
     }
@@ -64,6 +72,9 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
     ABAUTransport *transport = calloc(1, sizeof(*transport));
     if (!transport) { failure("transport allocation", ENOMEM); munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL; }
     transport->shared = s; transport->owner = create; strcpy(transport->name, name);
+    if (mach_timebase_info(&transport->timebase) != KERN_SUCCESS || !transport->timebase.denom) {
+        failure("clock timebase", EINVAL); munmap(s, sizeof(*s)); free(transport); if (create) shm_unlink(name); return NULL;
+    }
     return transport;
 }
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity) { return map_transport(name, true, capacity); }
@@ -117,9 +128,29 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     const Shared *s = t->shared; ABAUTransportMetrics result = {0};
     result.ready = atomic_load_explicit(&s->ready, memory_order_acquire);
     result.stopped = atomic_load_explicit(&s->stopped, memory_order_acquire);
+    result.bypassed = atomic_load_explicit(&s->bypass, memory_order_acquire);
     result.fault = atomic_load_explicit(&s->fault, memory_order_acquire);
     result.heartbeat = atomic_load_explicit(&s->heartbeat, memory_order_relaxed);
     result.processedFrames = atomic_load_explicit(&s->processedFrames, memory_order_relaxed);
+    result.inFlightFrames = atomic_load_explicit(&s->inFlightFrames, memory_order_relaxed);
+    result.renderBlocks = atomic_load_explicit(&s->renderBlocks, memory_order_relaxed);
+    result.renderNanoseconds = atomic_load_explicit(&s->renderNanoseconds, memory_order_relaxed);
+    result.lastRenderNanoseconds = atomic_load_explicit(&s->lastRenderNanoseconds, memory_order_relaxed);
+    result.maxRenderNanoseconds = atomic_load_explicit(&s->maxRenderNanoseconds, memory_order_relaxed);
     result.inputFrames = available(&s->input, s->capacity); result.outputFrames = available(&s->output, s->capacity);
     uint32_t bits = atomic_load(&s->latency); memcpy(&result.latencySeconds, &bits, sizeof(bits)); return result;
+}
+uint64_t ABAUTransportBeginBlock(ABAUTransport *t, uint32_t frames) {
+    atomic_store_explicit(&t->shared->inFlightFrames, frames, memory_order_relaxed);
+    return mach_absolute_time();
+}
+void ABAUTransportEndBlock(ABAUTransport *t, uint64_t start) {
+    uint64_t duration = (uint64_t)((long double)(mach_absolute_time() - start) * t->timebase.numer / t->timebase.denom);
+    Shared *s = t->shared;
+    atomic_store_explicit(&s->lastRenderNanoseconds, duration, memory_order_relaxed);
+    if (duration > atomic_load_explicit(&s->maxRenderNanoseconds, memory_order_relaxed))
+        atomic_store_explicit(&s->maxRenderNanoseconds, duration, memory_order_relaxed);
+    atomic_fetch_add_explicit(&s->renderNanoseconds, duration, memory_order_relaxed);
+    atomic_fetch_add_explicit(&s->renderBlocks, 1, memory_order_relaxed);
+    atomic_store_explicit(&s->inFlightFrames, 0, memory_order_relaxed);
 }

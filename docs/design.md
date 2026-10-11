@@ -47,6 +47,8 @@ Digital output gain: provisional -60 to +12 dB; 0 dB default; smooth changes. Di
 
 ## Status vocabulary
 
+Settings tabs: **Playback** (play icon) holds Start/Stop, stereo meters/linked gains and delay/processing telemetry; **Audio** holds UID device selection, current driver buffers, bridge fill and permission; **Routing** holds patch grids; **Effects** holds AU catalog/chain/editor controls. General, Diagnostics and About remain separate. Menu-bar quick controls remain available. The full-chain delay display explicitly distinguishes an estimated allowance from loopback measurement, retains Unknown device reports, and separates AU processing wall time from reported signal latency. Interface buffer drafts begin with the real current driver value, otherwise 128 frames clamped to a valid reported range; changes require explicit Apply while stopped.
+
 - **Stopped** — operator disabled routing; no retry.
 - **Waiting for input/output** — selected UID missing; automatic retry active.
 - **Starting** — opening and configuring devices.

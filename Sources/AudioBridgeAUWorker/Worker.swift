@@ -143,6 +143,8 @@ final class Renderer: @unchecked Sendable {
             guard ABAUTransportSnapshot(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
                 usleep(idleMicroseconds); return true // Helper only; HAL callbacks never wait.
             }
+            let renderStart = ABAUTransportBeginBlock(transport, frames)
+            defer { ABAUTransportEndBlock(transport, renderStart) }
             guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second

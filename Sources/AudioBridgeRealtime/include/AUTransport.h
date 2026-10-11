@@ -7,8 +7,10 @@ typedef struct {
     uint32_t inputFrames, outputFrames;
     uint64_t heartbeat, processedFrames;
     int32_t fault;
-    bool ready, stopped;
+    bool ready, stopped, bypassed;
     float latencySeconds;
+    uint32_t inFlightFrames;
+    uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
 } ABAUTransportMetrics;
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity);
 const char *ABAUTransportLastError(void);
@@ -22,6 +24,9 @@ bool ABAUTransportBypassed(const ABAUTransport *transport);
 void ABAUTransportFault(ABAUTransport *transport, int32_t fault);
 void ABAUTransportHeartbeat(ABAUTransport *transport);
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *transport);
+// Helper worker only; wall processing time is separate from signal latency.
+uint64_t ABAUTransportBeginBlock(ABAUTransport *transport, uint32_t frames);
+void ABAUTransportEndBlock(ABAUTransport *transport, uint64_t start);
 uint32_t ABAUCaptureWrite(ABAUTransport *transport, const float *samples, uint32_t frames);
 uint32_t ABAUOutputRead(ABAUTransport *transport, float *samples, uint32_t frames);
 uint32_t ABAUWorkerRead(ABAUTransport *transport, float *samples, uint32_t frames);
