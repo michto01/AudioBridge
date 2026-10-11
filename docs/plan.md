@@ -39,10 +39,12 @@ Implementation status: experimental manual HAL input/output path, C callback own
 
 ## Phase 3 — Drift, DSP and meters
 
+Approved extension: [ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md). Implement N×2 physical input mixing before the stereo AU/drift path, output L/R fan-out within one output device, versioned migration and routing grids. Follow with menu-bar status colours and compact UX. Mono/stereo presets remain the default workflow. Stop for review before supervisor/login work; previous and new automated/hardware gates remain pending.
+
 User-authorized preliminary slices: local signal meters, compact FIFO buffer settings, smooth digital input trim and output gain implemented to support manual Phase 2 routing checks. See [audio settings follow-up](audio-settings-results.md) and [buffer/gain follow-up](buffer-gain-results.md). The next authorized slice implements adaptive drift resampling and a persisted live matrix; see [Phase 3 results](phase-3-results.md). Builds and bundle checks pass; automated and hardware gates remain pending under the user instruction. Stop for review before Phase 4. User reported microphone routing working after refreshing permission, not a completed stereo signal or drift test.
 
 - Add adaptive resampling and FIFO occupancy control, measured correction and under/overrun accounting.
-- Add 2×2 matrix, presets, smoothed output gain, input/output peak meters and clipping indicators.
+- Add N×2 input matrix and stereo output fan-out, mono/stereo presets, smoothed gain, stereo mix/output peak meters and clipping indicators.
 - Implement latency profiles as documented tuning parameters, not unverified absolute promises.
 
 **Gate:** drift simulations at positive/negative ppm, matrix unit tests, 1–2 hour preliminary hardware test with stable buffer occupancy.

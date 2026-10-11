@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+The original 2×2 scope below is superseded by [ADR-002](ADR-002-stereo-mix-and-fanout.md); endpoint independence and explicit UID/channel identity remain accepted.
+
 ## Context
 
 The first deployment uses a TightAV Dante USB adapter and an ATEM Mini, but the user requires a reusable audio bridge independent of either device.
