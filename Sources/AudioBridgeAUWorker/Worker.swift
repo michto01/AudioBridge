@@ -80,6 +80,7 @@ final class Renderer: @unchecked Sendable {
     var stages: [Stage] = []
     var latencySeconds: Float = 0
     var idleMicroseconds: UInt32 = 1000
+    var blockBudgetNanoseconds: UInt64 = 0
 
     init(transport: OpaquePointer, frames: UInt32) {
         self.transport = transport; self.frames = frames
@@ -96,6 +97,11 @@ final class Renderer: @unchecked Sendable {
             throw AUError("Invalid helper processing format.")
         }
         idleMicroseconds = UInt32(min(1000, max(50, Double(frames) / request.sampleRate * 250_000)))
+        let budget = Double(frames) / request.sampleRate * 1_000_000_000
+        guard budget.isFinite, budget >= 1, budget < Double(UInt64.max) else {
+            throw AUError("Invalid helper block duration.")
+        }
+        blockBudgetNanoseconds = UInt64(budget)
         var latency: Double = 0
         for effect in request.chain.active {
             let wrapper = try await instantiateWrapper(effect)
@@ -140,8 +146,9 @@ final class Renderer: @unchecked Sendable {
         let count = Int(frames), bytes = UInt32(count * MemoryLayout<Float>.size)
         do {
             ABAUTransportHeartbeat(transport)
-            guard ABAUTransportSnapshot(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
-                usleep(idleMicroseconds); return true // Helper only; HAL callbacks never wait.
+            guard ABAUTransportQueues(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
+                ABAUTransportWorkerWait(transport, idleMicroseconds)
+                return true // Helper only; HAL callbacks never wait.
             }
             let renderStart = ABAUTransportBeginBlock(transport, frames)
             defer { ABAUTransportEndBlock(transport, renderStart) }
@@ -149,7 +156,7 @@ final class Renderer: @unchecked Sendable {
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second
             var timestamp = AudioTimeStamp()
-            timestamp.mSampleTime = Double(ABAUTransportSnapshot(transport).processedFrames)
+            timestamp.mSampleTime = Double(ABAUTransportProcessedFrames(transport))
             timestamp.mFlags = .sampleTimeValid
             for stage in stages {
                 stage.pull.samples = input

@@ -20,8 +20,13 @@ final class RenderDriver: @unchecked Sendable {
     func run() {
         while true {
             lock.lock(); let renderer = current; lock.unlock()
-            if ABAUTransportSnapshot(renderer.transport).stopped { return }
-            if !renderer.processBlock(bypass: ABAUTransportBypassed(renderer.transport)) { return }
+            if ABAUTransportStopped(renderer.transport) { return }
+            // Bound temporary Objective-C objects from plugin rendering on this
+            // long-lived helper thread. This is outside every HAL callback.
+            let succeeded = autoreleasepool {
+                renderer.processBlock(bypass: ABAUTransportBypassed(renderer.transport))
+            }
+            if !succeeded { return }
         }
     }
 }
@@ -44,6 +49,7 @@ final class LiveHost {
     func start() {
         Self.retained = self
         driver.setBypass(request.bypass == true)
+        ABAUTransportConfigureTiming(transport, renderer.blockBudgetNanoseconds)
         ABAUTransportReady(transport, renderer.latencySeconds)
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
@@ -51,7 +57,12 @@ final class LiveHost {
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
         let driver = driver
-        DispatchQueue.global(qos: .userInteractive).async { driver.run(); exit(0) }
+        // Dedicated ownership avoids occupying a shared GCD worker indefinitely.
+        // QoS remains a scheduling preference, not a deadline guarantee.
+        let renderThread = Thread { driver.run(); exit(0) }
+        renderThread.name = "AudioBridge AU render"
+        renderThread.qualityOfService = .userInteractive
+        renderThread.start()
     }
     private func reply(_ response: AULiveResponse) {
         do { try JSONEncoder().encode(response).write(to: directory.appendingPathComponent("response.json"), options: .atomic) }

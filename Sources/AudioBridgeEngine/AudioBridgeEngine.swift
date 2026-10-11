@@ -27,6 +27,10 @@ public struct EngineSnapshot: Sendable {
     public let auProcessedFrames: UInt64
     public let auResponse: AULiveResponse?
     public let driftPPM: Float
+    public let appliedDriftPPM: Float
+    public let driftHeldCallbacks: UInt64
+    public let driftLimitedCallbacks: UInt64
+    public let refillThresholdFrames: UInt32
     public let recenterFrames: UInt64
     public let rebufferEvents: UInt64
     public let physicalOutputPeak: Float
@@ -42,6 +46,11 @@ public struct EngineSnapshot: Sendable {
     public let auRenderNanoseconds: UInt64
     public let auLastRenderNanoseconds: UInt64
     public let auMaxRenderNanoseconds: UInt64
+    public let auBlockBudgetNanoseconds: UInt64
+    public let auRenderOverBudgetBlocks: UInt64
+    public let auWorkerWaits: UInt64
+    public let auWorkerLateWakeups: UInt64
+    public let auMaxWorkerWakeLatenessNanoseconds: UInt64
     public let delayInputDevice: DeviceFacts
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
@@ -279,13 +288,20 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             capacity: plan.capacity, targetFrames: plan.prefill,
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
             auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse,
-            driftPPM: metrics.driftPPM, recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
+            driftPPM: metrics.driftPPM, appliedDriftPPM: metrics.appliedDriftPPM,
+            driftHeldCallbacks: metrics.driftHeldCallbacks, driftLimitedCallbacks: metrics.driftLimitedCallbacks,
+            refillThresholdFrames: metrics.refillThresholdFrames,
+            recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
             physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,
             captureQueueFrames: auMetrics?.inputFrames ?? 0, processedQueueFrames: auMetrics?.outputFrames ?? 0,
             auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: plan.auBlockFrames,
             resamplerLookaheadFrames: ABResamplerLookahead(), queueLowFrames: queueLowFrames, queueHighFrames: queueHighFrames,
             auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
             auLastRenderNanoseconds: auMetrics?.lastRenderNanoseconds ?? 0, auMaxRenderNanoseconds: auMetrics?.maxRenderNanoseconds ?? 0,
+            auBlockBudgetNanoseconds: auMetrics?.blockBudgetNanoseconds ?? 0,
+            auRenderOverBudgetBlocks: auMetrics?.renderOverBudgetBlocks ?? 0,
+            auWorkerWaits: auMetrics?.workerWaits ?? 0, auWorkerLateWakeups: auMetrics?.workerLateWakeups ?? 0,
+            auMaxWorkerWakeLatenessNanoseconds: auMetrics?.maxWorkerWakeLatenessNanoseconds ?? 0,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
             recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds)

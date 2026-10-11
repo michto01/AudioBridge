@@ -76,6 +76,9 @@ final class AUChainTests: XCTestCase {
         XCTAssertEqual(scratch.withUnsafeMutableBufferPointer { ABAUWorkerRead(helper, $0.baseAddress, 2) }, 2)
         XCTAssertEqual(scratch, signal)
         XCTAssertEqual(scratch.withUnsafeBufferPointer { ABAUWorkerWrite(helper, $0.baseAddress, 2) }, 2)
+        XCTAssertEqual(ABAUTransportProcessedFrames(owner), 2)
+        XCTAssertEqual(ABAUTransportQueues(owner).inputFrames, 0)
+        XCTAssertEqual(ABAUTransportQueues(owner).outputFrames, 2)
         var output = [Float](repeating: -1, count: 8)
         XCTAssertEqual(output.withUnsafeMutableBufferPointer { ABAUOutputRead(owner, $0.baseAddress, 4) }, 2)
         XCTAssertEqual(output, [1, 0, 0, 0.5, 0, 0, 0, 0])
@@ -83,5 +86,36 @@ final class AUChainTests: XCTestCase {
         XCTAssertEqual(ABAUTransportSnapshot(owner).fault, -50)
         ABAUTransportShutdown(owner)
         XCTAssertTrue(ABAUTransportSnapshot(helper).stopped)
+        XCTAssertTrue(ABAUTransportStopped(helper))
+    }
+    func testTimingAccountingWithoutSleepingOrRendering() throws {
+        let name = "/abt" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(22)
+        let owner = try XCTUnwrap(ABAUTransportCreate(String(name), 1024))
+        defer { ABAUTransportClose(owner) }
+        let helper = try XCTUnwrap(ABAUTransportOpen(String(name)))
+        defer { ABAUTransportClose(helper) }
+        ABAUTransportUnlink(owner)
+        ABAUTransportConfigureTiming(helper, 1_000_000)
+        for duration in [UInt64(500_000), 1_000_000, 1_000_001] {
+            ABAUTransportRecordRenderDuration(helper, duration)
+        }
+        ABAUTransportRecordWorkerWait(helper, 100_000, 50_000) // Early return: no underflow.
+        ABAUTransportRecordWorkerWait(helper, 100_000, 1_100_000) // Equal budget is not over it.
+        ABAUTransportRecordWorkerWait(helper, 100_000, 1_100_001)
+        let timing = ABAUTransportSnapshot(owner)
+        XCTAssertEqual(timing.renderBlocks, 3)
+        XCTAssertEqual(timing.renderNanoseconds, 2_500_001)
+        XCTAssertEqual(timing.lastRenderNanoseconds, 1_000_001)
+        XCTAssertEqual(timing.maxRenderNanoseconds, 1_000_001)
+        XCTAssertEqual(timing.blockBudgetNanoseconds, 1_000_000)
+        XCTAssertEqual(timing.renderOverBudgetBlocks, 1)
+        XCTAssertEqual(timing.workerWaits, 3)
+        XCTAssertEqual(timing.workerLateWakeups, 1)
+        XCTAssertEqual(timing.maxWorkerWakeLatenessNanoseconds, 1_000_001)
+        ABAUTransportConfigureTiming(helper, 0) // Unknown duration disables classification.
+        ABAUTransportRecordRenderDuration(helper, 2_000_000)
+        ABAUTransportRecordWorkerWait(helper, 0, 2_000_000)
+        XCTAssertEqual(ABAUTransportSnapshot(owner).renderOverBudgetBlocks, 1)
+        XCTAssertEqual(ABAUTransportSnapshot(owner).workerLateWakeups, 1)
     }
 }

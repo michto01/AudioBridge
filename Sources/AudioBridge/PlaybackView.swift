@@ -76,6 +76,18 @@ private struct DelayView: View {
                     } else { Text("AU block timing: awaiting processing").font(.caption) }
                     Text("Processing block: \(s.auBlockFrames) frames / \(number(Double(s.auBlockFrames) / s.sampleRate * 1000)) ms · \(s.auRenderBlocks) blocks timed")
                         .font(.caption.monospacedDigit())
+                    DisclosureGroup("Buffer delivery diagnostics") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Drift command / applied: \(number(Double(s.driftPPM))) / \(number(Double(s.appliedDriftPPM))) ppm")
+                            Text("Controller held: \(s.driftHeldCallbacks) · unity limited: \(s.driftLimitedCallbacks) callbacks")
+                            Text("Current refill threshold: \(s.refillThresholdFrames) frames")
+                            Text("AU blocks over duration budget: \(s.auRenderOverBudgetBlocks) / \(s.auRenderBlocks)")
+                            Text("Polling wakeups late by more than a block: \(s.auWorkerLateWakeups) / \(s.auWorkerWaits)")
+                            Text("Maximum wake lateness: \(number(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms")
+                            Text("Wall time includes preemption. Counters are clues, not proof of an audible glitch or measured clock skew. Applied correction is the last callback sample; zero while refilling.")
+                                .foregroundStyle(.secondary)
+                        }.font(.caption.monospacedDigit()).padding(.top, 4)
+                    }
                     DisclosureGroup("Delay breakdown") {
                         VStack(spacing: 5) {
                             ForEach(estimate.components) { row in

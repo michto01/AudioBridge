@@ -36,6 +36,9 @@ typedef struct {
     bool primed;
     ABLevels inputLevels, outputLevels;
     float driftPPM;
+    float appliedDriftPPM;
+    uint64_t driftHeldCallbacks, driftLimitedCallbacks;
+    uint32_t refillThresholdFrames;
     uint64_t recenterFrames, rebufferEvents;
     uint64_t rawInputClips1, rawInputClips2;
     float physicalOutputPeak;

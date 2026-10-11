@@ -114,6 +114,8 @@ struct ABEngine {
     double sampleRate, driftTarget;
     uint32_t inputBuffer;
     _Atomic uint32_t driftPPMBits, physicalOutputPeak;
+    _Atomic uint32_t appliedDriftPPMBits, refillThresholdFrames;
+    _Atomic uint64_t driftHeldCallbacks, driftLimitedCallbacks;
     _Atomic uint64_t recenterFrames, rebufferEvents, physicalOutputClips;
 
 };
@@ -214,12 +216,14 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
         uint32_t frames;
         if (ABRoutingFrames(engine->routing, output, false, &frames) && frames <= engine->scratchFrames) {
             ABLevels levels = {0};
-            ABAUTransportMetrics queued = engine->au ? ABAUTransportSnapshot(engine->au)
-                : (ABAUTransportMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
+            ABAUQueueMetrics queued = engine->au ? ABAUTransportQueues(engine->au)
+                : (ABAUQueueMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
             // Reserve is left AFTER rendering a callback; FIR demand includes retained history.
             engine->driftTarget = engine->prefill + frames + engine->inputBuffer * 0.5;
             double ratio = 1 + engine->drift.ppm * 0.000001;
             uint32_t needed = ABResamplerInputNeeded(engine->resampler, frames, ratio);
+            atomic_store_explicit(&engine->refillThresholdFrames, engine->prefill + needed, memory_order_relaxed);
+            atomic_store_explicit(&engine->appliedDriftPPMBits, 0, memory_order_relaxed);
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
                 && queued.outputFrames >= engine->prefill + needed) {
                 ABDriftReanchor(&engine->drift, engine->driftTarget);
@@ -232,6 +236,7 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                     ratio = ABDriftStep(&engine->drift,
                         (double)queued.inputFrames + queued.outputFrames + queued.inFlightFrames,
                         engine->driftTarget, engine->sampleRate, frames);
+                else atomic_fetch_add_explicit(&engine->driftHeldCallbacks, 1, memory_order_relaxed);
                 atomic_store_explicit(&engine->driftPPMBits, float_bits((float)engine->drift.ppm), memory_order_relaxed);
                 if (queued.outputFrames > engine->scratchFrames * 9 / 10) {
                     uint32_t keep = engine->prefill + frames + ABResamplerLookahead();
@@ -248,8 +253,11 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 // A positive correction can need one extra source frame. Prefer a complete
                 // unity callback to avoidable starvation; retain the bounded PI command.
                 if (ratio > 1 && ABResamplerInputNeeded(engine->resampler, frames, ratio) > queued.outputFrames
-                    && ABResamplerInputNeeded(engine->resampler, frames, 1) <= queued.outputFrames)
+                    && ABResamplerInputNeeded(engine->resampler, frames, 1) <= queued.outputFrames) {
                     ratio = 1;
+                    atomic_fetch_add_explicit(&engine->driftLimitedCallbacks, 1, memory_order_relaxed);
+                }
+                atomic_store_explicit(&engine->appliedDriftPPMBits, float_bits((float)((ratio - 1) * 1e6)), memory_order_relaxed);
                 uint32_t read = ABResamplerProcess(engine->resampler, source_read, engine, engine->outputScratch, frames, ratio);
                 apply_gain(engine->outputScratch, frames, &engine->outputGain,
                     bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
@@ -302,11 +310,15 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
     engine->rampFrames = 960;
     engine->sampleRate = 48000; engine->inputBuffer = 512; engine->driftTarget = prefill + 17 + 256;
     atomic_init(&engine->driftPPMBits, 0); atomic_init(&engine->physicalOutputPeak, 0);
+    atomic_init(&engine->appliedDriftPPMBits, 0); atomic_init(&engine->refillThresholdFrames, 0);
+    atomic_init(&engine->driftHeldCallbacks, 0); atomic_init(&engine->driftLimitedCallbacks, 0);
     atomic_init(&engine->physicalOutputClips, 0); atomic_init(&engine->recenterFrames, 0); atomic_init(&engine->rebufferEvents, 0);
     if (!engine->ring || !engine->resampler || !engine->inputScratch || !engine->outputScratch
         || !atomic_is_lock_free(&engine->enabled) || !atomic_is_lock_free(&engine->primed)
         || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)
-        || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)) {
+        || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)
+        || !atomic_is_lock_free(&engine->appliedDriftPPMBits) || !atomic_is_lock_free(&engine->refillThresholdFrames)
+        || !atomic_is_lock_free(&engine->driftHeldCallbacks) || !atomic_is_lock_free(&engine->driftLimitedCallbacks)) {
         ABEngineDestroy(engine); return NULL;
     }
     return engine;
@@ -379,6 +391,10 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     result.rawInputClips1 = atomic_load_explicit(&engine->rawInputClips1, memory_order_relaxed);
     result.rawInputClips2 = atomic_load_explicit(&engine->rawInputClips2, memory_order_relaxed);
     result.driftPPM = bits_float(atomic_load_explicit(&engine->driftPPMBits, memory_order_relaxed));
+    result.appliedDriftPPM = bits_float(atomic_load_explicit(&engine->appliedDriftPPMBits, memory_order_relaxed));
+    result.refillThresholdFrames = atomic_load_explicit(&engine->refillThresholdFrames, memory_order_relaxed);
+    result.driftHeldCallbacks = atomic_load_explicit(&engine->driftHeldCallbacks, memory_order_relaxed);
+    result.driftLimitedCallbacks = atomic_load_explicit(&engine->driftLimitedCallbacks, memory_order_relaxed);
     result.recenterFrames = atomic_load_explicit(&engine->recenterFrames, memory_order_relaxed);
     result.rebufferEvents = atomic_load_explicit(&engine->rebufferEvents, memory_order_relaxed);
     result.physicalOutputPeak = bits_float(atomic_load_explicit(&engine->physicalOutputPeak, memory_order_relaxed));

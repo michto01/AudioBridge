@@ -53,6 +53,8 @@ Buffer/drift repair: 0.3.6/build 15 fixes speculative end-of-callback source rea
 
 **Gate:** drift simulations at positive/negative ppm, matrix unit tests, 1–2 hour preliminary hardware test with stable buffer occupancy.
 
+Worker-delivery follow-up: 0.3.7/build 16 uses a dedicated AU rendering thread, bounded autorelease lifetimes, minimal callback queue snapshots and separates wall-time/wake-lateness evidence from commanded/applied drift telemetry. See [results and deferred checks](worker-delivery-results.md). Real-time scheduling, measured CPU/continuity improvement and Phase 3 acceptance remain pending.
+
 ## Phase 4 — Supervision and UI
 
 User-authorized AU extension: installed effect catalog, persisted ordered chain, separate editor/render helper, and trim controls above meters implemented. See [AU hosting results](au-hosting-results.md). This expands the original DSP scope but does not pass Phase 3–5 gates or establish unattended readiness.
