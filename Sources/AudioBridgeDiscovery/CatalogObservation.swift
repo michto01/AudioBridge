@@ -22,7 +22,8 @@ public final class CatalogObservation {
         for device in devices {
             for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyNominalSampleRate,
                              kAudioDevicePropertyAvailableNominalSampleRates, kAudioDevicePropertyBufferFrameSize,
-                             kAudioDevicePropertyBufferFrameSizeRange, kAudioObjectPropertyName] {
+                             kAudioDevicePropertyBufferFrameSizeRange, kAudioObjectPropertyName,
+                             kAudioDevicePropertyIcon] {
                 add(device.runtimeID, selector)
             }
             for scope in [kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput] {

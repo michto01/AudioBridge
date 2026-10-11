@@ -13,6 +13,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var permission = "Not checked"
     @Published private(set) var requestingPermission = false
     @Published private(set) var refreshing = false
+    @Published private(set) var deviceIcons: [String: NSImage] = [:]
+    private var iconCache: [URL: NSImage] = [:]
     private let store = SelectionStore()
     private let probeQueue = DispatchQueue(label: "cz.bytelab.audiobridge.discovery", qos: .utility)
     private var observation: CatalogObservation?
@@ -75,6 +77,15 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 switch result {
                 case .success(let snapshot):
+                    var icons: [String: NSImage] = [:]
+                    for device in snapshot.devices {
+                        guard let url = device.iconURL, url.isFileURL else { continue }
+                        if let image = self.iconCache[url] ?? NSImage(contentsOf: url) {
+                            self.iconCache[url] = image
+                            icons[device.uid] = image
+                        }
+                    }
+                    self.deviceIcons = icons
                     self.observation?.watch(snapshot.devices)
                     self.catalog = CatalogSnapshot(devices: snapshot.devices,
                         issues: snapshot.issues + (self.observation?.issues ?? []))

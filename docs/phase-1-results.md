@@ -2,6 +2,10 @@
 
 Date: 2026-10-11. Phase 0 UI was accepted by user testing before this work.
 
+Follow-up: user confirmed that selections survive relaunch and microphone permission is granted. These packaged-app checks are user verified. Physical external-device unplug/replug remains pending.
+
+Device selectors now query the SDK's `kAudioDevicePropertyIcon` (caller-owned CFURL to an image file) and display that image when available and readable. Local file URLs only; unavailable icons use native SF Symbols by transport/direction. Icons are cached by URL and selected by UID; they do not affect routing identity. Device icon property changes are observed. Build, bundle assembly, ad-hoc signing and strict verification passed for this follow-up; UI icon rendering still needs visual review.
+
 ## Implemented slice
 
 Shared read-only Core Audio catalog and `AudioBridgeProbe` CLI; input/output UID pickers; explicit one-based physical channel selection for two logical lanes; versioned selection persistence; missing endpoint/channel state; Core Audio property listeners; microphone authorization status and one explicit request button; permission recovery guidance; device diagnostics and timestamped JSON export. The app owns the catalog independently of settings/popover lifetime. No vendor branches, dependencies, device/default/rate mutations or audio IO were added. Routing, meters, login and DSP remain unimplemented.

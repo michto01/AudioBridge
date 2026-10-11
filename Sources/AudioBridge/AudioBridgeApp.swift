@@ -120,7 +120,13 @@ private struct SettingsView: View {
                     set: { model.selectUID($0, direction: direction) }
                 )) {
                     Text("Choose explicitly…").tag("")
-                    ForEach(available) { Text("\($0.name) [\($0.uid)]").tag($0.uid) }
+                    ForEach(available) { device in
+                        Label {
+                            Text("\(device.name) [\(device.uid)]")
+                        } icon: {
+                            DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid])
+                        }.tag(device.uid)
+                    }
                     if let uid = selected.uid, !available.contains(where: { $0.uid == uid }) {
                         Text("Missing / unavailable: \(uid)").tag(uid)
                     }

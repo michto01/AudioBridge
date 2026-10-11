@@ -40,7 +40,7 @@ public enum CoreAudioCatalog {
         let clock = read("clock domain") { try scalar(id, kAudioDevicePropertyClockDomain, initial: UInt32(0)) }
         let input = direction(id, scope: kAudioObjectPropertyScopeInput, issues: &issues)
         let output = direction(id, scope: kAudioObjectPropertyScopeOutput, issues: &issues)
-        return DeviceFacts(runtimeID: id, uid: uid, name: name, transport: transport, alive: alive,
+        return DeviceFacts(runtimeID: id, uid: uid, name: name, transport: transport, iconURL: iconURL(id), alive: alive,
             nominalSampleRate: rate, availableSampleRates: rates, bufferFrames: frames,
             bufferFrameRange: frameRange, clockDomain: clock, input: input, output: output, issues: issues)
     }
@@ -132,6 +132,18 @@ public enum CoreAudioCatalog {
         }
         // HAL name/UID properties transfer ownership to the caller (AudioHardwareBase.h).
         return result.takeRetainedValue() as String
+    }
+    private static func iconURL(_ id: UInt32) -> URL? {
+        var property = address(kAudioDevicePropertyIcon, kAudioObjectPropertyScopeGlobal)
+        guard AudioObjectHasProperty(id, &property) else { return nil }
+        var result: Unmanaged<CFURL>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFURL>?>.size)
+        let status = AudioObjectGetPropertyData(id, &property, 0, nil, &size, &result)
+        guard status == noErr, let result else { return nil }
+        // This property transfers CFURL ownership to the caller, like name/UID.
+        let url = result.takeRetainedValue() as URL
+        guard size == MemoryLayout<Unmanaged<CFURL>?>.size, url.isFileURL else { return nil }
+        return url
     }
     private static func values<T>(_ id: UInt32, _ selector: UInt32, scope: UInt32 = kAudioObjectPropertyScopeGlobal) throws -> [T] {
         try bytes(id, selector, scope: scope) { pointer, size in

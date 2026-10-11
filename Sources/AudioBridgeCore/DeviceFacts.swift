@@ -95,6 +95,7 @@ public struct DeviceFacts: Codable, Equatable, Sendable, Identifiable {
     public let uid: String
     public let name: String
     public let transport: String?
+    public let iconURL: URL?
     public let alive: Bool?
     public let nominalSampleRate: Double?
     public let availableSampleRates: [ValueRange]
@@ -105,11 +106,13 @@ public struct DeviceFacts: Codable, Equatable, Sendable, Identifiable {
     public let output: DirectionFacts
     public let issues: [String]
     public init(runtimeID: UInt32, uid: String, name: String, transport: String? = nil,
+                iconURL: URL? = nil,
                 alive: Bool? = nil, nominalSampleRate: Double? = nil,
                 availableSampleRates: [ValueRange] = [], bufferFrames: UInt32? = nil,
                 bufferFrameRange: ValueRange? = nil, clockDomain: UInt32? = nil,
                 input: DirectionFacts = .init(), output: DirectionFacts = .init(), issues: [String] = []) {
         self.runtimeID = runtimeID; self.uid = uid; self.name = name; self.transport = transport
+        self.iconURL = iconURL
         self.alive = alive; self.nominalSampleRate = nominalSampleRate
         self.availableSampleRates = availableSampleRates; self.bufferFrames = bufferFrames
         self.bufferFrameRange = bufferFrameRange; self.clockDomain = clockDomain
