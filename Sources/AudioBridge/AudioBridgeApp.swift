@@ -6,7 +6,6 @@ import SwiftUI
 @MainActor
 struct AudioBridgeApp: App {
     @StateObject private var model = AppModel()
-    private let shell = ShellStatus()
 
     var body: some Scene {
         MenuBarExtra {
@@ -17,10 +16,12 @@ struct AudioBridgeApp: App {
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
+                SignalMeters(model: model, direction: .input)
                 Text("Output: \(endpointName(.output))")
+                SignalMeters(model: model, direction: .output)
                 if let issue = model.inputIssue { Text(issue).font(.caption) }
                 if let issue = model.outputIssue { Text(issue).font(.caption) }
-                Text("Input / output meters: \(shell.meterText)").foregroundStyle(.secondary)
+                if !model.routingRequested, let reason = model.startUnavailableReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
                 HStack {
                     Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
                     Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
@@ -53,8 +54,19 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
+                    Text(model.status).font(.headline)
+                    HStack {
+                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
+                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
+                    }
+                    if !model.routingRequested, let reason = model.startUnavailableReason {
+                        Text("Start unavailable: \(reason)").font(.caption).foregroundStyle(.secondary)
+                    }
                     endpointPicker(.input)
                     endpointPicker(.output)
+                    BufferSettings(model: model)
+                    Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Divider()
                     Text("Microphone permission: \(model.permission)")
                     HStack {
@@ -66,15 +78,10 @@ private struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button(model.refreshing ? "Refreshing…" : "Refresh devices and permission") { model.refresh() }
                         .disabled(model.refreshing)
-                    HStack {
-                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
-                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
-                        Text(model.status).font(.caption)
-                    }
                     if model.routingRequested || model.routingTransitioning {
                         Text("Stop routing to change devices or channels.").font(.caption)
                     }
-                    Text("Matrix, gain, latency and login controls are not yet implemented.")
+                    Text("Matrix, gain, drift correction and login controls are not yet implemented.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }.tabItem { Label("Audio", systemImage: "waveform") }
@@ -85,12 +92,16 @@ private struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
+                    Text("Build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development") · bundle: \(Bundle.main.bundlePath)")
+                        .font(.caption)
                     if let metrics = model.engineSnapshot {
                         Text("Input callbacks: \(metrics.inputCallbacks) · output callbacks: \(metrics.outputCallbacks)")
                         Text("Captured / rendered frames: \(metrics.inputFrames) / \(metrics.outputFrames)")
                         Text("FIFO: \(metrics.bufferedFrames) frames · prefill complete: \(metrics.primed ? "yes" : "no")")
                         Text("Underrun / overrun frames: \(metrics.underrunFrames) / \(metrics.overrunFrames) · format faults: \(metrics.formatFaults)")
                         Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · drift correction: not implemented")
+                        Text("Input clipped samples: \(metrics.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
+                        Text("Output clipped samples: \(metrics.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                     }
                     Text("Microphone permission: \(model.permission)")
                     HStack {
@@ -148,11 +159,16 @@ private struct SettingsView: View {
                     if let uid = selected.uid, !available.contains(where: { $0.uid == uid }) {
                         Text("Selected device unavailable").tag(uid)
                     }
-                }
+                }.disabled(!model.canEditSelections)
                 HStack {
                     channelPicker(direction, lane: 1, channels: device?.facts(for: direction).physicalChannels ?? [])
                     channelPicker(direction, lane: 2, channels: device?.facts(for: direction).physicalChannels ?? [])
+                }.disabled(!model.canEditSelections)
+                if direction == .input, device?.input.physicalChannels.count == 1 {
+                    Button("Use mono input in both lanes") { model.duplicateMonoInput() }
+                        .disabled(!model.canEditSelections)
                 }
+                SignalMeters(model: model, direction: direction)
                 if let device {
                     Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz · buffer \(device.bufferFrames.map(String.init) ?? "unknown") frames")
                         .font(.caption)
@@ -167,7 +183,7 @@ private struct SettingsView: View {
                         : "Both output lanes sum into one physical channel. Full-level inputs can clip.")
                         .font(.caption)
                 }
-            }.padding(6).disabled(!model.canEditSelections)
+            }.padding(6)
         }
     }
     private func channelPicker(_ direction: AudioDirection, lane: Int, channels: [Int]) -> some View {

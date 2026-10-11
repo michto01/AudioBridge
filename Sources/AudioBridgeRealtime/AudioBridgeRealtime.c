@@ -3,6 +3,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
+
+ABLevels ABMeasureStereo(const float *stereo, uint32_t frames) {
+    ABLevels levels = {0};
+    for (uint32_t i = 0; i < frames; ++i) {
+        float a = fabsf(stereo[i * 2]), b = fabsf(stereo[i * 2 + 1]);
+        if (a > levels.peak1) levels.peak1 = a;
+        if (b > levels.peak2) levels.peak2 = b;
+        if (a >= 1) ++levels.clips1;
+        if (b >= 1) ++levels.clips2;
+    }
+    return levels;
+}
 
 struct ABRing {
     float *samples;
@@ -73,7 +86,19 @@ struct ABEngine {
     _Atomic uint32_t inFlight;
     _Atomic uint64_t inputCallbacks, outputCallbacks, inputFrames, outputFrames;
     _Atomic uint64_t underrunFrames, overrunFrames, formatFaults;
+    // Float bits use lock-free integer atomics; single writer per direction.
+    _Atomic uint32_t inputPeak1, inputPeak2, outputPeak1, outputPeak2;
+    _Atomic uint64_t inputClips1, inputClips2, outputClips1, outputClips2;
 };
+
+static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
+static float bits_float(uint32_t bits) { float value; memcpy(&value, &bits, sizeof(value)); return value; }
+static void publish_levels(ABEngine *engine, ABLevels levels, bool input) {
+    atomic_store_explicit(input ? &engine->inputPeak1 : &engine->outputPeak1, float_bits(levels.peak1), memory_order_relaxed);
+    atomic_store_explicit(input ? &engine->inputPeak2 : &engine->outputPeak2, float_bits(levels.peak2), memory_order_relaxed);
+    atomic_fetch_add_explicit(input ? &engine->inputClips1 : &engine->outputClips1, levels.clips1, memory_order_relaxed);
+    atomic_fetch_add_explicit(input ? &engine->inputClips2 : &engine->outputClips2, levels.clips2, memory_order_relaxed);
+}
 
 static bool valid_layout(ABLayout layout) {
     return layout.channels > 0 && layout.channels <= 4096
@@ -119,7 +144,14 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
             for (uint32_t i = 0; i < frames; ++i) {
                 engine->inputScratch[i * 2] = sample_at(input, engine->inputLayout, i, engine->inputLayout.lane1);
                 engine->inputScratch[i * 2 + 1] = sample_at(input, engine->inputLayout, i, engine->inputLayout.lane2);
+                for (uint32_t lane = 0; lane < 2; ++lane) {
+                    if (!isfinite(engine->inputScratch[i * 2 + lane])) {
+                        engine->inputScratch[i * 2 + lane] = 0;
+                        atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
+                    }
+                }
             }
+            publish_levels(engine, ABMeasureStereo(engine->inputScratch, frames), true);
             uint32_t written = ABRingWrite(engine->ring, engine->inputScratch, frames);
             atomic_fetch_add_explicit(&engine->inputFrames, written, memory_order_relaxed);
             atomic_fetch_add_explicit(&engine->overrunFrames, frames - written, memory_order_relaxed);
@@ -139,21 +171,27 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
         atomic_fetch_add_explicit(&engine->outputCallbacks, 1, memory_order_relaxed);
         uint32_t frames;
         if (buffer_frames(output, engine->outputLayout, &frames) && frames <= engine->scratchFrames) {
+            ABLevels levels = {0};
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
                 && ABRingAvailable(engine->ring) >= engine->prefill)
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
                 uint32_t read = ABRingRead(engine->ring, engine->outputScratch, frames);
                 for (uint32_t i = 0; i < frames; ++i) {
-                    put_sample(output, engine->outputLayout, i, engine->outputLayout.lane1, engine->outputScratch[i * 2]);
                     // Explicit duplicate output selection sums both lanes, never silently overwrites one.
                     float second = engine->outputScratch[i * 2 + 1];
                     if (engine->outputLayout.lane1 == engine->outputLayout.lane2) second += engine->outputScratch[i * 2];
+                    if (!isfinite(second)) { second = 0; atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed); }
+                    if (engine->outputLayout.lane1 == engine->outputLayout.lane2) engine->outputScratch[i * 2] = second;
+                    engine->outputScratch[i * 2 + 1] = second;
+                    put_sample(output, engine->outputLayout, i, engine->outputLayout.lane1, engine->outputScratch[i * 2]);
                     put_sample(output, engine->outputLayout, i, engine->outputLayout.lane2, second);
                 }
+                levels = ABMeasureStereo(engine->outputScratch, frames);
                 atomic_fetch_add_explicit(&engine->outputFrames, read, memory_order_relaxed);
                 atomic_fetch_add_explicit(&engine->underrunFrames, frames - read, memory_order_relaxed);
             }
+            publish_levels(engine, levels, false);
         } else atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
     }
     atomic_fetch_sub_explicit(&engine->inFlight, 1, memory_order_release);
@@ -176,9 +214,14 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, ABLayout inp
     atomic_init(&engine->inputCallbacks, 0); atomic_init(&engine->outputCallbacks, 0);
     atomic_init(&engine->inputFrames, 0); atomic_init(&engine->outputFrames, 0);
     atomic_init(&engine->underrunFrames, 0); atomic_init(&engine->overrunFrames, 0); atomic_init(&engine->formatFaults, 0);
+    atomic_init(&engine->inputPeak1, 0); atomic_init(&engine->inputPeak2, 0);
+    atomic_init(&engine->outputPeak1, 0); atomic_init(&engine->outputPeak2, 0);
+    atomic_init(&engine->inputClips1, 0); atomic_init(&engine->inputClips2, 0);
+    atomic_init(&engine->outputClips1, 0); atomic_init(&engine->outputClips2, 0);
     if (!engine->ring || !engine->inputScratch || !engine->outputScratch
         || !atomic_is_lock_free(&engine->enabled) || !atomic_is_lock_free(&engine->primed)
-        || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)) {
+        || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)
+        || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)) {
         ABEngineDestroy(engine); return NULL;
     }
     return engine;
@@ -240,5 +283,13 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     AB_LOAD(underrunFrames); AB_LOAD(overrunFrames); AB_LOAD(formatFaults); AB_LOAD(primed);
 #undef AB_LOAD
     result.bufferedFrames = ABRingAvailable(engine->ring);
+    result.inputLevels.peak1 = bits_float(atomic_load_explicit(&engine->inputPeak1, memory_order_relaxed));
+    result.inputLevels.peak2 = bits_float(atomic_load_explicit(&engine->inputPeak2, memory_order_relaxed));
+    result.outputLevels.peak1 = bits_float(atomic_load_explicit(&engine->outputPeak1, memory_order_relaxed));
+    result.outputLevels.peak2 = bits_float(atomic_load_explicit(&engine->outputPeak2, memory_order_relaxed));
+    result.inputLevels.clips1 = atomic_load_explicit(&engine->inputClips1, memory_order_relaxed);
+    result.inputLevels.clips2 = atomic_load_explicit(&engine->inputClips2, memory_order_relaxed);
+    result.outputLevels.clips1 = atomic_load_explicit(&engine->outputClips1, memory_order_relaxed);
+    result.outputLevels.clips2 = atomic_load_explicit(&engine->outputClips2, memory_order_relaxed);
     return result;
 }

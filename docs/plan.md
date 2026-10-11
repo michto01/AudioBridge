@@ -39,6 +39,8 @@ Implementation status: experimental manual HAL input/output path, C callback own
 
 ## Phase 3 — Drift, DSP and meters
 
+User-authorized preliminary slice: local signal meters and provisional FIFO buffer profiles implemented to support manual Phase 2 routing checks. See [audio settings follow-up](audio-settings-results.md). This does not complete Phase 3 or pass any audio gate; adaptive drift compensation, matrix and smoothed gain remain pending.
+
 - Add adaptive resampling and FIFO occupancy control, measured correction and under/overrun accounting.
 - Add 2×2 matrix, presets, smoothed output gain, input/output peak meters and clipping indicators.
 - Implement latency profiles as documented tuning parameters, not unverified absolute promises.

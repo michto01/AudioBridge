@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var routingTransitioning = false
     @Published private(set) var engineSnapshot: EngineSnapshot?
     @Published private(set) var routingFault: String?
+    @Published private(set) var bufferProfile: BufferProfile = .balanced
     private let engine = AudioBridgeEngine()
     private var routingGeneration: UInt64 = 0
     private var manuallyStopped = false
@@ -30,12 +31,21 @@ final class AppModel: ObservableObject {
     private var canSave = true
     var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning }
     var canStartRouting: Bool {
-        canEditSelections && inputIssue == nil && outputIssue == nil
-            && AVAudioApplication.shared.recordPermission == .granted
+        startUnavailableReason == nil
+    }
+    var startUnavailableReason: String? {
+        if routingRequested || routingTransitioning { return "Stop routing before starting a new route." }
+        if !canSave { return "Saved configuration needs attention before routing can start." }
+        if let inputIssue { return inputIssue }
+        if let outputIssue { return outputIssue }
+        if AVAudioApplication.shared.recordPermission != .granted { return "Grant microphone permission before starting." }
+        return routeReadiness
     }
     var canStopRouting: Bool { routingRequested || routingTransitioning || routingFault != nil }
 
     init() {
+        if let saved = UserDefaults.standard.string(forKey: "AudioBridge.bufferProfile"),
+           let profile = BufferProfile(rawValue: saved) { bufferProfile = profile }
         do { selection = try store.load() }
         catch { self.error = "Saved selections could not be read: \(error). Existing data is retained."; canSave = false }
         observation = CatalogObservation { [weak self] in self?.refresh() }
@@ -88,6 +98,12 @@ final class AppModel: ObservableObject {
         if direction == .input { next.input = endpoint } else { next.output = endpoint }
         commit(next)
     }
+    func duplicateMonoInput() {
+        guard let channels = device(.input)?.input.physicalChannels, channels.count == 1 else { return }
+        var next = selection
+        next.input.lane1 = channels[0]; next.input.lane2 = channels[0]
+        commit(next)
+    }
     private func commit(_ next: RouteSelection) {
         guard canEditSelections else { return }
         do { try store.save(next); selection = next; error = nil }
@@ -100,7 +116,7 @@ final class AppModel: ObservableObject {
         routingFault = nil; engineSnapshot = nil; manuallyStopped = false
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
-        engine.start(selection: selection, updated: { [weak self] snapshot in
+        engine.start(selection: selection, profile: bufferProfile, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -131,6 +147,7 @@ final class AppModel: ObservableObject {
         routingGeneration &+= 1
         let generation = routingGeneration
         routingRequested = false; routingTransitioning = true; manuallyStopped = true
+        engineSnapshot = nil; routingFault = nil
         engine.stop { [weak self] result in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation else { return }
@@ -138,6 +155,19 @@ final class AppModel: ObservableObject {
                 if case .failure(let error) = result { self.routingFault = error.localizedDescription }
             }
         }
+    }
+    func setBufferProfile(_ profile: BufferProfile) {
+        guard canEditSelections else { return }
+        bufferProfile = profile
+        UserDefaults.standard.set(profile.rawValue, forKey: "AudioBridge.bufferProfile")
+    }
+    var routePlan: Phase2Plan? {
+        try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile)
+    }
+    var routeReadiness: String? {
+        guard inputIssue == nil, outputIssue == nil else { return nil }
+        do { _ = try Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile); return nil }
+        catch { return error.localizedDescription }
     }
     func quit() {
         engine.stop { _ in Task { @MainActor in NSApplication.shared.terminate(nil) } }

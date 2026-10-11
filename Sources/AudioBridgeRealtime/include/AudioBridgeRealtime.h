@@ -20,6 +20,12 @@ typedef struct {
 
 typedef struct ABEngine ABEngine;
 typedef struct {
+    float peak1, peak2;
+    uint64_t clips1, clips2;
+} ABLevels;
+// Pure finite stereo sample measurement, no allocation; peaks are absolute amplitudes.
+ABLevels ABMeasureStereo(const float *stereo, uint32_t frames);
+typedef struct {
     uint64_t inputCallbacks;
     uint64_t outputCallbacks;
     uint64_t inputFrames;
@@ -29,6 +35,7 @@ typedef struct {
     uint64_t formatFaults;
     uint32_t bufferedFrames;
     bool primed;
+    ABLevels inputLevels, outputLevels;
 } ABMetrics;
 
 // Lifecycle functions are exclusively called on the owning non-realtime serial queue.

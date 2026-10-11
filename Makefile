@@ -25,7 +25,7 @@ app: build
 	BUILD_CONFIGURATION="$(BUILD_CONFIGURATION)" DIST_DIR="$(DIST_DIR)" ./scripts/package-app.sh
 
 run: sign
-	open "$(APP)"
+	/bin/bash ./scripts/run-app.sh "$(APP)"
 
 sign: app
 	./scripts/sign-app.sh "$(APP)"
