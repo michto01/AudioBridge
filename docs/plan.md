@@ -39,7 +39,7 @@ Implementation status: experimental manual HAL input/output path, C callback own
 
 ## Phase 3 — Drift, DSP and meters
 
-User-authorized preliminary slice: local signal meters and provisional FIFO buffer profiles implemented to support manual Phase 2 routing checks. See [audio settings follow-up](audio-settings-results.md). This does not complete Phase 3 or pass any audio gate; adaptive drift compensation, matrix and smoothed gain remain pending.
+User-authorized preliminary slices: local signal meters, compact FIFO buffer settings, smooth digital input trim and output gain implemented to support manual Phase 2 routing checks. See [audio settings follow-up](audio-settings-results.md) and [buffer/gain follow-up](buffer-gain-results.md). This does not complete Phase 3 or pass its audio gate; adaptive drift compensation and configurable matrix remain pending. User reported microphone routing working after refreshing permission, not a completed stereo signal or drift test.
 
 - Add adaptive resampling and FIFO occupancy control, measured correction and under/overrun accounting.
 - Add 2×2 matrix, presets, smoothed output gain, input/output peak meters and clipping indicators.

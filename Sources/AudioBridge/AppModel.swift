@@ -20,6 +20,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var engineSnapshot: EngineSnapshot?
     @Published private(set) var routingFault: String?
     @Published private(set) var bufferProfile: BufferProfile = .balanced
+    @Published private(set) var customBufferFrames: UInt32?
+    @Published private(set) var inputTrim: Double = 0
+    @Published private(set) var outputGain: Double = 0
     private let engine = AudioBridgeEngine()
     private var routingGeneration: UInt64 = 0
     private var manuallyStopped = false
@@ -44,6 +47,15 @@ final class AppModel: ObservableObject {
     var canStopRouting: Bool { routingRequested || routingTransitioning || routingFault != nil }
 
     init() {
+        let preferences = UserDefaults.standard
+        if let saved = preferences.object(forKey: "AudioBridge.bufferFrames") as? NSNumber,
+           saved.int64Value > 0, saved.int64Value <= 32768 { customBufferFrames = saved.uint32Value }
+        for (key, direction) in [("AudioBridge.inputTrim", AudioDirection.input), ("AudioBridge.outputGain", .output)] {
+            if let saved = preferences.object(forKey: key) as? NSNumber,
+               saved.doubleValue.isFinite, GainSettings.range.contains(saved.doubleValue) {
+                if direction == .input { inputTrim = saved.doubleValue } else { outputGain = saved.doubleValue }
+            }
+        }
         if let saved = UserDefaults.standard.string(forKey: "AudioBridge.bufferProfile"),
            let profile = BufferProfile(rawValue: saved) { bufferProfile = profile }
         do { selection = try store.load() }
@@ -116,7 +128,8 @@ final class AppModel: ObservableObject {
         routingFault = nil; engineSnapshot = nil; manuallyStopped = false
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
-        engine.start(selection: selection, profile: bufferProfile, updated: { [weak self] snapshot in
+        engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
+                     inputTrim: inputTrim, outputGain: outputGain, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -160,13 +173,29 @@ final class AppModel: ObservableObject {
         guard canEditSelections else { return }
         bufferProfile = profile
         UserDefaults.standard.set(profile.rawValue, forKey: "AudioBridge.bufferProfile")
+        customBufferFrames = nil
+        UserDefaults.standard.removeObject(forKey: "AudioBridge.bufferFrames")
+    }
+    var bufferMinimum: UInt32 { max(16, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
+    var bufferMaximum: UInt32 { 32768 }
+    var selectedBufferFrames: UInt32 { customBufferFrames ?? bufferProfile.targetFrames(deviceBuffer: min(4096, bufferMinimum)) }
+    func setBufferFrames(_ frames: UInt32) {
+        guard canEditSelections, frames >= bufferMinimum, frames <= bufferMaximum else { return }
+        customBufferFrames = frames
+        UserDefaults.standard.set(Int(frames), forKey: "AudioBridge.bufferFrames")
+    }
+    func setGain(_ decibels: Double, direction: AudioDirection) {
+        guard canSave, decibels.isFinite, GainSettings.range.contains(decibels) else { return }
+        if direction == .input { inputTrim = decibels } else { outputGain = decibels }
+        UserDefaults.standard.set(decibels, forKey: direction == .input ? "AudioBridge.inputTrim" : "AudioBridge.outputGain")
+        engine.setGains(inputTrim: inputTrim, outputGain: outputGain)
     }
     var routePlan: Phase2Plan? {
-        try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile)
+        try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile, bufferFrames: customBufferFrames)
     }
     var routeReadiness: String? {
         guard inputIssue == nil, outputIssue == nil else { return nil }
-        do { _ = try Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile); return nil }
+        do { _ = try Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile, bufferFrames: customBufferFrames); return nil }
         catch { return error.localizedDescription }
     }
     func quit() {
@@ -230,7 +259,7 @@ final class AppModel: ObservableObject {
     func checkPermission() {
         switch AVAudioApplication.shared.recordPermission {
         case .undetermined: permission = "Not requested"
-        case .granted: permission = "Granted (capture has not been tested)"
+        case .granted: permission = "Granted"
         case .denied: permission = "Denied — enable Audio Bridge in System Settings → Privacy & Security → Microphone."
         @unknown default: permission = "Unknown — check System Settings"
         }

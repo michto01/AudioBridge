@@ -12,7 +12,7 @@ struct AudioBridgeApp: App {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.headline)
                 Label(model.status, systemImage: "info.circle")
-                Text("Experimental identity routing. Drift correction is not implemented.").foregroundStyle(.secondary)
+                Text("Experimental routing. Drift correction is not implemented.").foregroundStyle(.secondary)
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
@@ -50,7 +50,7 @@ private struct SettingsView: View {
         TabView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Experimental identity routing at 0 dB. Drift correction and rate conversion are not implemented; use for attended checks only.")
+                    Text("Experimental routing. Drift correction and rate conversion are not implemented; use for attended checks only.")
                         .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
@@ -81,7 +81,7 @@ private struct SettingsView: View {
                     if model.routingRequested || model.routingTransitioning {
                         Text("Stop routing to change devices or channels.").font(.caption)
                     }
-                    Text("Matrix, gain, drift correction and login controls are not yet implemented.")
+                    Text("Matrix, drift correction and login controls are not yet implemented.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }.tabItem { Label("Audio", systemImage: "waveform") }
@@ -102,6 +102,7 @@ private struct SettingsView: View {
                         Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · drift correction: not implemented")
                         Text("Input clipped samples: \(metrics.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                         Text("Output clipped samples: \(metrics.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
+                        Text("Raw input full-scale samples: \(metrics.rawInputClips.map(String.init).joined(separator: " / "))")
                     }
                     Text("Microphone permission: \(model.permission)")
                     HStack {
@@ -169,6 +170,11 @@ private struct SettingsView: View {
                         .disabled(!model.canEditSelections)
                 }
                 SignalMeters(model: model, direction: direction)
+                GainControl(model: model, direction: direction)
+                if direction == .input, let raw = model.engineSnapshot?.rawInputClips, raw.contains(where: { $0 > 0 }) {
+                    Text("Input reached full scale before trim. Digital attenuation cannot repair capture clipping.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 if let device {
                     Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz · buffer \(device.bufferFrames.map(String.init) ?? "unknown") frames")
                         .font(.caption)

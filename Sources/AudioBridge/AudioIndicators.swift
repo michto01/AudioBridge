@@ -38,29 +38,73 @@ struct SignalMeters: View {
 
 struct BufferSettings: View {
     @ObservedObject var model: AppModel
+    @State private var expert = false
     var body: some View {
-        GroupBox("Buffers") {
-            VStack(alignment: .leading, spacing: 10) {
-                Picker("Bridge buffer", selection: Binding(get: { model.bufferProfile }, set: { model.setBufferProfile($0) })) {
-                    ForEach(BufferProfile.allCases, id: \.self) { Text($0.title).tag($0) }
-                }.pickerStyle(.segmented).disabled(!model.canEditSelections)
-                let target = model.engineSnapshot?.targetFrames ?? model.routePlan?.prefill
-                let capacity = model.engineSnapshot?.capacity ?? model.routePlan?.capacity
-                let rate = model.engineSnapshot?.sampleRate ?? model.routePlan?.sampleRate
-                if let target, let capacity, let rate {
-                    Text("Startup fill: \(target) frames (\((Double(target) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms) · capacity: \(capacity) frames")
-                        .font(.caption)
-                    if model.routingRequested, let metrics = model.engineSnapshot {
-                        ProgressView(value: Double(metrics.bufferedFrames), total: Double(capacity))
-                        Text("Buffered: \(metrics.bufferedFrames) frames · \(metrics.primed ? "Ready" : "Filling")")
-                            .font(.caption.monospacedDigit())
-                        Text("Underrun: \(metrics.underrunFrames) frames · overrun: \(metrics.overrunFrames) frames")
-                            .font(.caption.monospacedDigit())
-                    } else { Text("Buffer inactive").font(.caption).foregroundStyle(.secondary) }
-                } else { Text("Choose valid devices and channels to see buffer sizes.").font(.caption) }
-                Text("Low uses less startup buffering; Robust gives more margin. Device buffers are read-only. These are provisional settings, not measured end-to-end latency. Drift correction is not implemented.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(6)
+        GroupBox("Bridge buffer") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Slider(value: Binding(get: {
+                        log2(Double(max(16, min(model.bufferMaximum, model.selectedBufferFrames))))
+                    }, set: {
+                        let frames = UInt32(pow(2, $0.rounded()))
+                        model.setBufferFrames(max(model.bufferMinimum, min(model.bufferMaximum, frames)))
+                    }), in: log2(Double(min(model.bufferMinimum, model.bufferMaximum / 2)))...log2(Double(model.bufferMaximum)))
+                        .accessibilityLabel("Bridge startup buffer in frames")
+                        .disabled(!model.canEditSelections || model.bufferMinimum > 4096)
+                    Text("\(model.selectedBufferFrames) frames").font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
+                }
+                HStack {
+                    Text("\(model.bufferMinimum)–\(model.bufferMaximum) frames").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if let rate = model.routePlan?.sampleRate {
+                        Text("\((Double(model.selectedBufferFrames) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms startup fill")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                DisclosureGroup("Expert", isExpanded: $expert) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Exact frames")
+                            TextField("Frames", value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
+                                if $0 >= Int(model.bufferMinimum), $0 <= Int(model.bufferMaximum) { model.setBufferFrames(UInt32($0)) }
+                            }), format: .number.grouping(.never)).frame(width: 90)
+                            Picker("Preset", selection: Binding(get: { model.bufferProfile }, set: { model.setBufferProfile($0) })) {
+                                ForEach(BufferProfile.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            Button("Apply preset") { model.setBufferProfile(model.bufferProfile) }
+                        }.disabled(!model.canEditSelections)
+                        Text("Minimum follows the larger device buffer. Slider uses power-of-two steps; exact values need not. Stop before changing. Device buffers remain read-only; no drift correction or measured latency guarantee.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(.top, 4)
+                }
+                if model.routingRequested, let metrics = model.engineSnapshot {
+                    Text("\(metrics.bufferedFrames) / \(metrics.capacity) frames · \(metrics.primed ? "Ready" : "Filling") · underrun \(metrics.underrunFrames) · overrun \(metrics.overrunFrames)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }.padding(4)
         }
+    }
+}
+
+struct GainControl: View {
+    @ObservedObject var model: AppModel
+    let direction: AudioDirection
+    private var binding: Binding<Double> {
+        Binding(get: { direction == .input ? model.inputTrim : model.outputGain },
+                set: { model.setGain($0, direction: direction) })
+    }
+    var body: some View {
+        HStack {
+            Text(direction == .input ? "Input trim" : "Output gain").font(.caption).frame(width: 80, alignment: .leading)
+            Slider(value: binding, in: GainSettings.range, step: 0.5)
+                .accessibilityLabel(direction == .input ? "Input trim in decibels" : "Output gain in decibels")
+            TextField("dB", value: binding, format: .number.precision(.fractionLength(1)))
+                .textFieldStyle(.roundedBorder).frame(width: 65)
+                .accessibilityLabel("Exact gain in decibels")
+            Text("dB").font(.caption)
+            Button { model.setGain(0, direction: direction) } label: { Image(systemName: "arrow.uturn.backward") }
+                .help("Reset to 0 dB")
+        }
+        .help("Digital gain, −60 to +12 dB. Both lanes change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged.")
     }
 }

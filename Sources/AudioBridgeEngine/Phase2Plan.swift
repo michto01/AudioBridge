@@ -18,7 +18,7 @@ public struct Phase2Plan: Sendable {
     public let capacity: UInt32
     public let prefill: UInt32
 
-    public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced) throws {
+    public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced, bufferFrames: UInt32? = nil) throws {
         input = try Self.endpoint(selection.input, direction: .input, devices: devices)
         output = try Self.endpoint(selection.output, direction: .output, devices: devices)
         guard input.device.uid != output.device.uid else {
@@ -32,9 +32,12 @@ public struct Phase2Plan: Sendable {
         guard largestBuffer > 0, largestBuffer <= 4096 else {
             throw PlanError("The initial path supports callback buffers up to 4096 frames.")
         }
-        prefill = profile.targetFrames(deviceBuffer: largestBuffer)
-        var size: UInt32 = 16384
-        while size < prefill * 2 { size *= 2 }
+        prefill = bufferFrames ?? profile.targetFrames(deviceBuffer: largestBuffer)
+        guard prefill >= largestBuffer, prefill <= 32768 else {
+            throw PlanError("Bridge buffering must be between \(largestBuffer) and 32768 frames for these devices.")
+        }
+        var size: UInt32 = 1024
+        while size < max(prefill * 2, largestBuffer * 4) { size *= 2 }
         capacity = size
     }
     private static func endpoint(_ selection: EndpointSelection, direction: AudioDirection,

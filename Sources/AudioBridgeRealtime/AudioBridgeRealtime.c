@@ -17,6 +17,21 @@ ABLevels ABMeasureStereo(const float *stereo, uint32_t frames) {
     return levels;
 }
 
+void ABGainRetarget(ABGainRamp *ramp, float target, uint32_t frames) {
+    if (!isfinite(target) || target < 0 || target > 4) return;
+    ramp->target = target;
+    ramp->remaining = frames;
+    ramp->step = frames ? (target - ramp->current) / frames : 0;
+    if (!frames) ramp->current = target;
+}
+float ABGainNext(ABGainRamp *ramp) {
+    if (ramp->remaining) {
+        ramp->current += ramp->step;
+        if (--ramp->remaining == 0) ramp->current = ramp->target;
+    }
+    return ramp->current;
+}
+
 struct ABRing {
     float *samples;
     uint32_t capacity;
@@ -89,10 +104,37 @@ struct ABEngine {
     // Float bits use lock-free integer atomics; single writer per direction.
     _Atomic uint32_t inputPeak1, inputPeak2, outputPeak1, outputPeak2;
     _Atomic uint64_t inputClips1, inputClips2, outputClips1, outputClips2;
+    _Atomic uint32_t inputGainTarget, outputGainTarget;
+    _Atomic uint64_t rawInputClips1, rawInputClips2;
+    ABGainRamp inputGain, outputGain;
+    uint32_t rampFrames;
 };
 
 static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
 static float bits_float(uint32_t bits) { float value; memcpy(&value, &bits, sizeof(value)); return value; }
+void ABEngineSetGains(ABEngine *engine, float input, float output) {
+    if (!engine || !isfinite(input) || !isfinite(output) || input < 0 || input > 4 || output < 0 || output > 4) return;
+    atomic_store_explicit(&engine->inputGainTarget, float_bits(input), memory_order_relaxed);
+    atomic_store_explicit(&engine->outputGainTarget, float_bits(output), memory_order_relaxed);
+}
+void ABEngineInitialGains(ABEngine *engine, float input, float output, uint32_t rampFrames) {
+    if (!engine || engine->inputProc || engine->outputProc) return;
+    ABEngineSetGains(engine, input, output);
+    engine->inputGain = (ABGainRamp){ .current = bits_float(atomic_load(&engine->inputGainTarget)), .target = bits_float(atomic_load(&engine->inputGainTarget)) };
+    engine->outputGain = (ABGainRamp){ .current = bits_float(atomic_load(&engine->outputGainTarget)), .target = bits_float(atomic_load(&engine->outputGainTarget)) };
+    engine->rampFrames = rampFrames;
+}
+static void apply_gain(float *samples, uint32_t frames, ABGainRamp *ramp, float target, uint32_t rampFrames, ABEngine *engine) {
+    if (target != ramp->target) ABGainRetarget(ramp, target, rampFrames);
+    for (uint32_t i = 0; i < frames; ++i) {
+        float gain = ABGainNext(ramp);
+        for (uint32_t lane = 0; lane < 2; ++lane) {
+            float sample = samples[i * 2 + lane] * gain;
+            if (!isfinite(sample)) { sample = 0; atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed); }
+            samples[i * 2 + lane] = sample;
+        }
+    }
+}
 static void publish_levels(ABEngine *engine, ABLevels levels, bool input) {
     atomic_store_explicit(input ? &engine->inputPeak1 : &engine->outputPeak1, float_bits(levels.peak1), memory_order_relaxed);
     atomic_store_explicit(input ? &engine->inputPeak2 : &engine->outputPeak2, float_bits(levels.peak2), memory_order_relaxed);
@@ -151,6 +193,11 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
                     }
                 }
             }
+            ABLevels raw = ABMeasureStereo(engine->inputScratch, frames);
+            atomic_fetch_add_explicit(&engine->rawInputClips1, raw.clips1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&engine->rawInputClips2, raw.clips2, memory_order_relaxed);
+            apply_gain(engine->inputScratch, frames, &engine->inputGain,
+                bits_float(atomic_load_explicit(&engine->inputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
             publish_levels(engine, ABMeasureStereo(engine->inputScratch, frames), true);
             uint32_t written = ABRingWrite(engine->ring, engine->inputScratch, frames);
             atomic_fetch_add_explicit(&engine->inputFrames, written, memory_order_relaxed);
@@ -177,6 +224,8 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
                 uint32_t read = ABRingRead(engine->ring, engine->outputScratch, frames);
+                apply_gain(engine->outputScratch, frames, &engine->outputGain,
+                    bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
                 for (uint32_t i = 0; i < frames; ++i) {
                     // Explicit duplicate output selection sums both lanes, never silently overwrites one.
                     float second = engine->outputScratch[i * 2 + 1];
@@ -218,6 +267,11 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, ABLayout inp
     atomic_init(&engine->outputPeak1, 0); atomic_init(&engine->outputPeak2, 0);
     atomic_init(&engine->inputClips1, 0); atomic_init(&engine->inputClips2, 0);
     atomic_init(&engine->outputClips1, 0); atomic_init(&engine->outputClips2, 0);
+    atomic_init(&engine->inputGainTarget, float_bits(1)); atomic_init(&engine->outputGainTarget, float_bits(1));
+    atomic_init(&engine->rawInputClips1, 0); atomic_init(&engine->rawInputClips2, 0);
+    engine->inputGain = (ABGainRamp){ .current = 1, .target = 1 };
+    engine->outputGain = (ABGainRamp){ .current = 1, .target = 1 };
+    engine->rampFrames = 960;
     if (!engine->ring || !engine->inputScratch || !engine->outputScratch
         || !atomic_is_lock_free(&engine->enabled) || !atomic_is_lock_free(&engine->primed)
         || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)
@@ -291,5 +345,7 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     result.inputLevels.clips2 = atomic_load_explicit(&engine->inputClips2, memory_order_relaxed);
     result.outputLevels.clips1 = atomic_load_explicit(&engine->outputClips1, memory_order_relaxed);
     result.outputLevels.clips2 = atomic_load_explicit(&engine->outputClips2, memory_order_relaxed);
+    result.rawInputClips1 = atomic_load_explicit(&engine->rawInputClips1, memory_order_relaxed);
+    result.rawInputClips2 = atomic_load_explicit(&engine->rawInputClips2, memory_order_relaxed);
     return result;
 }

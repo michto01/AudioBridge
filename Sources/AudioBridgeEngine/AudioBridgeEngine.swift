@@ -21,6 +21,7 @@ public struct EngineSnapshot: Sendable {
     public let outputActive: Bool
     public let capacity: UInt32
     public let targetFrames: UInt32
+    public let rawInputClips: [UInt64]
 }
 
 public struct MeterLevel: Sendable {
@@ -49,6 +50,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         queue.async { [self] in
@@ -56,12 +58,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 guard context == nil else { throw Phase2Plan.PlanError("The previous engine has not fully stopped. Stop it before starting again.") }
                 // Fresh UID resolution and format validation; never use UI runtime IDs or defaults.
                 let fresh = try CoreAudioCatalog.snapshot()
-                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile)
+                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames)
                 guard let created = ABEngineCreate(next.input.device.runtimeID, next.output.device.runtimeID,
                     next.input.layout, next.output.layout, next.capacity, next.prefill) else {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next
+                ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
                 let status = ABEngineStart(created)
                 guard status == 0 else {
                     let cleanup = stopOnQueue()
@@ -82,6 +85,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         queue.async { [self] in
             if let error = stopOnQueue() { completion(.failure(Phase2Plan.PlanError(error))) }
             else { completion(.success(())) }
+        }
+    }
+    public func setGains(inputTrim: Double, outputGain: Double) {
+        queue.async { [self] in
+            guard let context else { return }
+            ABEngineSetGains(context, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain))
         }
     }
     private func poll(updated: @escaping @Sendable (EngineSnapshot) -> Void) {
@@ -129,7 +138,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             outputLevels: [MeterLevel(amplitude: metrics.outputLevels.peak1, clippedSamples: metrics.outputLevels.clips1),
                            MeterLevel(amplitude: metrics.outputLevels.peak2, clippedSamples: metrics.outputLevels.clips2)],
             inputActive: inputActive, outputActive: outputActive && metrics.primed,
-            capacity: plan.capacity, targetFrames: plan.prefill)
+            capacity: plan.capacity, targetFrames: plan.prefill,
+            rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2])
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {
