@@ -1,0 +1,33 @@
+name: macOS ZIP release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect Apple toolchain
+        run: make doctor
+      - name: Build
+        run: make build
+      - name: Run automated tests
+        run: make test
+      - name: Build and validate release ZIP
+        run: make DIST_DIR=dist release
+      - name: Confirm tag matches app version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          test "$RELEASE_TAG" = "v$VERSION"
+      - name: Publish ZIP and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/AudioBridge-macOS.zip dist/AudioBridge-macOS.zip.sha256 --generate-notes

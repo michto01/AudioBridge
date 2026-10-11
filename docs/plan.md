@@ -77,6 +77,8 @@ Catalog discovery now has a persistent metadata cache, isolated first-run/manual
 
 ## Phase 5 — Hardening and distribution
 
+Current implementation: local Phase 5 tooling begins with macOS 14 CI (`make doctor/build/test`), tag-validated ZIP publishing and the existing signed ZIP/checksum release flow. See [Phase 5 implementation and pending acceptance](phase-5-results.md). CI and release workflows have been authored but not run remotely; tests and live audio remain deferred per user instruction. Do not mark the phase gate complete until hardware, lifecycle, clean-install and soak evidence is recorded.
+
 - Test all device loss, sample rate, sleep/wake and permissions cases.
 - Audit real-time callback allocations/locks, memory ownership, teardown races, thread sanitizer coverage where possible.
 - Package ad-hoc signed ZIP, verify signature and clean-install behavior on a second Mac if available.

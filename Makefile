@@ -37,7 +37,7 @@ release:
 	$(MAKE) BUILD_CONFIGURATION=release DIST_DIR="$(DIST_DIR)" sign
 	$(MAKE) DIST_DIR="$(DIST_DIR)" verify
 	cd "$(DIST_DIR)" && ditto --norsrc -c -k --keepParent AudioBridge.app AudioBridge-macOS.zip
-	/usr/bin/shasum -a 256 "$(DIST_DIR)/AudioBridge-macOS.zip"
+	/usr/bin/shasum -a 256 "$(DIST_DIR)/AudioBridge-macOS.zip" | tee "$(DIST_DIR)/AudioBridge-macOS.zip.sha256"
 
 clean:
 	swift package clean

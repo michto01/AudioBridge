@@ -1,0 +1,21 @@
+name: macOS CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect Apple toolchain
+        run: make doctor
+      - name: Build
+        run: make build
+      - name: Run automated tests
+        run: make test
