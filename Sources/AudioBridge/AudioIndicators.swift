@@ -73,7 +73,7 @@ struct BufferSettings: View {
                             }
                             Button("Apply preset") { model.setBufferProfile(model.bufferProfile) }
                         }.disabled(!model.canEditSelections)
-                        Text("Minimum follows the larger device buffer. Slider uses power-of-two steps; exact values need not. Stop before changing. Device buffers remain read-only; no drift correction or measured latency guarantee.")
+                        Text("Minimum follows the larger device buffer, at least 16 frames. Small values are experimental and can underrun. Interface buffers are changed separately. Stop before changing; no drift correction or measured latency guarantee.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 4)
                 }

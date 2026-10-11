@@ -1,4 +1,5 @@
 import AudioBridgeCore
+import AudioBridgeAU
 import AudioBridgeRealtime
 import Foundation
 
@@ -17,6 +18,7 @@ public struct Phase2Plan: Sendable {
     public let sampleRate: Double
     public let capacity: UInt32
     public let prefill: UInt32
+    public let auBlockFrames: UInt32
 
     public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced, bufferFrames: UInt32? = nil) throws {
         input = try Self.endpoint(selection.input, direction: .input, devices: devices)
@@ -33,9 +35,10 @@ public struct Phase2Plan: Sendable {
             throw PlanError("The initial path supports callback buffers up to 4096 frames.")
         }
         prefill = bufferFrames ?? profile.targetFrames(deviceBuffer: largestBuffer)
-        guard prefill >= largestBuffer, prefill <= 32768 else {
-            throw PlanError("Bridge buffering must be between \(largestBuffer) and 32768 frames for these devices.")
+        guard prefill >= max(16, largestBuffer), prefill <= 32768 else {
+            throw PlanError("Bridge buffering must be between \(max(16, largestBuffer)) and 32768 frames for these devices.")
         }
+        auBlockFrames = try AUBlockSizing.frames(startupFill: prefill)
         var size: UInt32 = 1024
         while size < max(prefill * 2, largestBuffer * 4) { size *= 2 }
         capacity = size

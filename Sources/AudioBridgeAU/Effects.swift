@@ -63,6 +63,14 @@ public struct AUError: Error, LocalizedError, Sendable {
     public init(_ message: String) { self.message = message }
     public var errorDescription: String? { message }
 }
+public enum AUBlockSizing {
+    public static func frames(startupFill: UInt32) throws -> UInt32 {
+        guard startupFill >= 16, startupFill <= 32768 else { throw AUError("Startup fill must be 16–32768 frames.") }
+        var block: UInt32 = 16
+        while block < 256, block * 2 <= startupFill { block *= 2 }
+        return block
+    }
+}
 public struct AUWorkerRequest: Codable, Sendable {
     public let chain: AUChain
     public let sampleRate: Double

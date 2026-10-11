@@ -7,6 +7,11 @@ import CoreAudioKit
 import SwiftUI
 
 @MainActor
+final class EditorBypassStatus: ObservableObject {
+    @Published var bypassed = false
+}
+
+@MainActor
 final class Editor: NSObject, NSWindowDelegate {
     private static var retained: Editor?
     private var effect: AUEffect
@@ -18,21 +23,31 @@ final class Editor: NSObject, NSWindowDelegate {
     private var liveCompletion: ((AUEffect?, String?) -> Void)?
     private var sizeObservation: NSObjectProtocol?
     private var lastEditorSize = NSSize.zero
+    private let bypassStatus = EditorBypassStatus()
+    private var statusTimer: Timer?
     init(effect: AUEffect, output: URL) { self.effect = effect; self.output = output }
     static func launch(input: URL, output: URL) {
         NSApplication.shared.setActivationPolicy(.regular)
         do {
             let effect = try JSONDecoder().decode(AUEffect.self, from: Data(contentsOf: input))
             let editor = Editor(effect: effect, output: output); retained = editor; editor.open()
+            editor.statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak editor] _ in
+                MainActor.assumeIsolated {
+                    if let data = try? Data(contentsOf: input.deletingLastPathComponent().appendingPathComponent("bypass.json")),
+                       let value = try? JSONDecoder().decode(Bool.self, from: data) { editor?.bypassStatus.bypassed = value }
+                }
+            }
         } catch { exit(2) }
     }
-    static func showLive(effect: AUEffect, wrapper: AVAudioUnit, completion: @escaping (AUEffect?, String?) -> Void) {
+    static func showLive(effect: AUEffect, wrapper: AVAudioUnit, bypassed: Bool, completion: @escaping (AUEffect?, String?) -> Void) {
         NSApplication.shared.setActivationPolicy(.regular)
         let editor = Editor(effect: effect, output: URL(fileURLWithPath: "/dev/null"))
         editor.wrapper = wrapper; editor.unit = wrapper.auAudioUnit; editor.liveCompletion = completion
+        editor.bypassStatus.bypassed = bypassed
         retained = editor; editor.open()
     }
     static func closeLive() { if retained?.liveCompletion != nil { retained?.save() } }
+    static func setChainBypassed(_ bypassed: Bool) { retained?.bypassStatus.bypassed = bypassed }
     private func open() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -62,7 +77,7 @@ final class Editor: NSObject, NSWindowDelegate {
     private func install(_ wrapper: AVAudioUnit) {
         let legacy = ABCreateCocoaEditor(wrapper.audioUnit, .zero)
         window?.contentView = NSHostingView(rootView: EffectEditor(unit: wrapper.auAudioUnit, legacy: legacy,
-            live: liveCompletion != nil, fit: { [weak self] in self?.fit($0) }, save: { [weak self] in self?.save() }))
+            live: liveCompletion != nil, bypassStatus: bypassStatus, fit: { [weak self] in self?.fit($0) }, save: { [weak self] in self?.save() }))
         if let legacy {
             fit(legacy)
             DispatchQueue.main.async { [weak self, weak legacy] in if let legacy { self?.fit(legacy) } }
@@ -82,7 +97,7 @@ final class Editor: NSObject, NSWindowDelegate {
         lastEditorSize = size
         let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         window.setContentSize(NSSize(width: min(max(440, size.width + 32), screen.width - 40),
-            height: min(max(350, size.height + 110), screen.height - 80)))
+            height: min(max(350, size.height + 140), screen.height - 80)))
     }
     private func showError(_ message: String) { window?.contentView = NSHostingView(rootView: Text(message).padding()) }
     private func save() {
@@ -93,6 +108,7 @@ final class Editor: NSObject, NSWindowDelegate {
             }
             if let liveCompletion {
                 self.liveCompletion = nil
+                statusTimer?.invalidate()
                 if let sizeObservation { NotificationCenter.default.removeObserver(sizeObservation); self.sizeObservation = nil }
                 window?.delegate = nil; window?.close()
                 liveCompletion(effect, nil); Self.retained = nil
@@ -112,6 +128,7 @@ private struct EffectEditor: View {
     let unit: AUAudioUnit
     let legacy: NSView?
     let live: Bool
+    @ObservedObject var bypassStatus: EditorBypassStatus
     let fit: (NSView) -> Void
     let save: () -> Void
     @State private var native: NSViewController?
@@ -125,6 +142,10 @@ private struct EffectEditor: View {
                 if !live { Button("Cancel") { NSApplication.shared.terminate(nil) } }
             }
             Text(live ? "Controls affect the running effect immediately. Close saves settings." : "Changes apply on the next Start.").font(.caption).foregroundStyle(.secondary)
+            if bypassStatus.bypassed {
+                Label("Chain bypassed — you can edit settings; output uses dry audio.", systemImage: "arrow.triangle.branch")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if let legacy {
                 ScrollView([.horizontal, .vertical]) {
                     LegacyEditor(view: legacy).frame(width: max(400, legacy.frame.width), height: max(300, legacy.frame.height))

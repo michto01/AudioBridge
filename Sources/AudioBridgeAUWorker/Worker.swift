@@ -69,6 +69,7 @@ final class Renderer: @unchecked Sendable {
     var stages: [Stage] = []
     var sampleTime: Double = 0
     var latencySeconds: Float = 0
+    var idleMicroseconds: UInt32 = 1000
 
     init(transport: OpaquePointer, frames: UInt32) {
         self.transport = transport; self.frames = frames
@@ -79,10 +80,12 @@ final class Renderer: @unchecked Sendable {
         list = AudioBufferList.allocate(maximumBuffers: 2); list.unsafeMutablePointer.pointee.mNumberBuffers = 2
     }
     func prepare(request: AUWorkerRequest) async throws {
-        guard request.sampleRate.isFinite, request.sampleRate > 0, frames == 256,
+        guard request.sampleRate.isFinite, request.sampleRate > 0, frames >= 16, frames <= 256,
+              frames & (frames - 1) == 0,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: request.sampleRate, channels: 2, interleaved: false) else {
             throw AUError("Invalid helper processing format.")
         }
+        idleMicroseconds = UInt32(min(1000, max(50, Double(frames) / request.sampleRate * 250_000)))
         var latency: Double = 0
         for effect in request.chain.active {
             let wrapper: AVAudioUnit = try await withCheckedThrowingContinuation { continuation in
@@ -122,13 +125,13 @@ final class Renderer: @unchecked Sendable {
         do {
             ABAUTransportHeartbeat(transport)
             guard ABAUTransportSnapshot(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
-                usleep(1000); return true // Helper only; HAL callbacks never wait.
+                usleep(idleMicroseconds); return true // Helper only; HAL callbacks never wait.
             }
             guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second
             var timestamp = AudioTimeStamp(); timestamp.mSampleTime = sampleTime; timestamp.mFlags = .sampleTimeValid
-            for stage in stages where !bypass {
+            for stage in stages {
                 stage.pull.samples = input
                 for lane in 0..<2 {
                     list[lane] = AudioBuffer(mNumberChannels: 1, mDataByteSize: bytes, mData: output.advanced(by: lane * count))
@@ -148,7 +151,7 @@ final class Renderer: @unchecked Sendable {
             for i in 0..<count {
                 let a = input[i], b = input[count + i]
                 guard a.isFinite, b.isFinite else { fail(kAudioUnitErr_InvalidPropertyValue); return false }
-                scratch[i * 2] = a; scratch[i * 2 + 1] = b
+                if !bypass { scratch[i * 2] = a; scratch[i * 2 + 1] = b }
             }
             guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
             sampleTime += Double(frames)

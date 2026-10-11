@@ -45,7 +45,7 @@ struct AUEffectsView: View {
                     Text("AU frames: \(metrics.auProcessedFrames) · reported plugin latency: \((Double(metrics.auLatencySeconds) * 1000).formatted(.number.precision(.fractionLength(1)))) ms")
                         .font(.caption.monospacedDigit())
                 }
-                Text("Input trim → effects in listed order → output gain. Live inserts prepare alongside the old chain and switch at a block boundary; audible transitions are possible. Bypass chain skips all effects and leaves trim/gain active. Drift/recovery validation remains pending.")
+                Text("Input trim → effects in listed order → output gain. Bypass outputs dry audio while effects remain editable and processing. Live inserts switch at a block boundary; audible transitions are possible. Drift/recovery validation remains pending.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(4)
         }

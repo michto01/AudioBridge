@@ -57,6 +57,7 @@ final class LiveHost {
         busy = false
     }
     private func poll() {
+        Editor.setChainBypassed(ABAUTransportBypassed(transport))
         let close = directory.appendingPathComponent("close-editor")
         if FileManager.default.fileExists(atPath: close.path) {
             try? FileManager.default.removeItem(at: close); Editor.closeLive()
@@ -72,7 +73,7 @@ final class LiveHost {
             guard let stage = renderer.stages.first(where: { $0.effect.id == id }) else {
                 reply(AULiveResponse(id: command.id, error: "Effect is not loaded in the live chain.")); return
             }
-            Editor.showLive(effect: stage.effect, wrapper: stage.wrapper) { [weak self] effect, error in
+            Editor.showLive(effect: stage.effect, wrapper: stage.wrapper, bypassed: ABAUTransportBypassed(transport)) { [weak self] effect, error in
                 self?.reply(AULiveResponse(id: command.id, effect: effect, error: error))
             }
             return

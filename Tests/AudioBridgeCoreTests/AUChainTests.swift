@@ -6,6 +6,15 @@ import XCTest
 
 /// Deferred tests: no real plugin instantiation or hardware capture.
 final class AUChainTests: XCTestCase {
+    func testSmallerBlocksRespectStartupFillAndRejectZero() throws {
+        XCTAssertEqual(try AUBlockSizing.frames(startupFill: 16), 16)
+        XCTAssertEqual(try AUBlockSizing.frames(startupFill: 32), 32)
+        XCTAssertEqual(try AUBlockSizing.frames(startupFill: 48), 32)
+        XCTAssertEqual(try AUBlockSizing.frames(startupFill: 128), 128)
+        XCTAssertEqual(try AUBlockSizing.frames(startupFill: 512), 256)
+        XCTAssertThrowsError(try AUBlockSizing.frames(startupFill: 0))
+        XCTAssertThrowsError(try AUBlockSizing.frames(startupFill: 32769))
+    }
     func testLiveCommandIdentityAndWholeChainBypass() throws {
         let command = AULiveCommand(bypass: true)
         let restored = try JSONDecoder().decode(AULiveCommand.self, from: JSONEncoder().encode(command))

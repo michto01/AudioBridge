@@ -55,7 +55,7 @@ final class AppModel: ObservableObject {
     }
     var startUnavailableReason: String? {
         if changingDeviceBuffer { return "Applying audio interface buffer size…" }
-        if selectedBufferFrames < 256 { return "Live AU hosting needs at least 256 startup buffer frames." }
+        if selectedBufferFrames < bufferMinimum { return "Startup fill must be at least \(bufferMinimum) frames for the current device buffers." }
         if routingRequested || routingTransitioning { return "Stop routing before starting a new route." }
         if !canSave { return "Saved configuration needs attention before routing can start." }
         if let inputIssue { return inputIssue }
@@ -67,7 +67,6 @@ final class AppModel: ObservableObject {
             if let missing = auChain.active.first(where: { effect in !auCatalog.contains(where: { $0.id == effect.identity }) }) {
                 return "Selected Audio Unit is unavailable: \(missing.name). Remove it or explicitly bypass it."
             }
-            if selectedBufferFrames < 256 { return "An AU chain needs at least 256 buffer frames." }
         }
         return routeReadiness
     }
@@ -227,7 +226,7 @@ final class AppModel: ObservableObject {
         customBufferFrames = nil
         UserDefaults.standard.removeObject(forKey: "AudioBridge.bufferFrames")
     }
-    var bufferMinimum: UInt32 { max(256, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
+    var bufferMinimum: UInt32 { max(16, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
     var bufferMaximum: UInt32 { 32768 }
     var selectedBufferFrames: UInt32 { customBufferFrames ?? bufferProfile.targetFrames(deviceBuffer: min(4096, bufferMinimum)) }
     func setBufferFrames(_ frames: UInt32) {
@@ -303,6 +302,7 @@ final class AppModel: ObservableObject {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             let input = directory.appendingPathComponent("input.json"), output = directory.appendingPathComponent("saved.json")
             try JSONEncoder().encode(effect).write(to: input, options: .atomic)
+            try JSONEncoder().encode(chainBypassed).write(to: directory.appendingPathComponent("bypass.json"), options: .atomic)
             let process = Process()
             process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AudioBridgeAUWorker")
             process.arguments = ["edit", input.path, output.path]
@@ -361,6 +361,10 @@ final class AppModel: ObservableObject {
         guard !routingTransitioning else { return }
         chainBypassed = bypass
         UserDefaults.standard.set(bypass, forKey: "AudioBridge.chainBypassed")
+        if let directory = auEditorDirectory {
+            do { try JSONEncoder().encode(bypass).write(to: directory.appendingPathComponent("bypass.json"), options: .atomic) }
+            catch { self.error = "Unable to update editor bypass indicator: \(error.localizedDescription)" }
+        }
         if routingRequested {
             engine.auControl(bypass: bypass) { [weak self] result in
                 Task { @MainActor in

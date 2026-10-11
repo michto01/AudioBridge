@@ -73,7 +73,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 }
                 context = created; plan = next
                 do {
-                    guard next.prefill >= 256 else { throw AUError("An AU chain needs at least 256 frames of bridge startup fill.") }
+                    guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
                     auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass, cancelled: { [self] in
                         self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
                     })

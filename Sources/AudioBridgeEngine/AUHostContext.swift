@@ -23,7 +23,7 @@ final class AUHostContext {
                 throw AUError("Cannot allocate AU shared memory: \(String(cString: ABAUTransportLastError())).")
             }
             transport = mapping
-            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: 256, bypass: bypass)
+            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: plan.auBlockFrames, bypass: bypass)
             let configuration = directory.appendingPathComponent("request.json")
             try JSONEncoder().encode(request).write(to: configuration, options: .atomic)
             process.executableURL = Self.workerURL

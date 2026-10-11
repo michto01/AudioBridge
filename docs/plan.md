@@ -53,6 +53,8 @@ User-authorized AU extension: installed effect catalog, persisted ordered chain,
 
 Follow-up: live chain insertion/removal, same-instance parameter editing, automatic editor sizing and whole-chain bypass implemented; see [live AU results](live-au-results.md). Runtime acceptance, transition behavior and the reported allocation failure remain unverified.
 
+Bypass now selects dry output while keeping effects editable and processing; editor indication added. The fixed 256-frame floor is removed in favor of device-constrained startup fill (minimum 16) and 16–256 AU blocks. See [bypass and small-buffer results](bypass-small-buffer-results.md); low-buffer hardware acceptance remains deferred.
+
 - Build supervisor state machine with desired-vs-observed state, bounded backoff and UID-driven reconnection.
 - Implement menu-bar popover, settings window, diagnostics and configuration migration.
 - Implement login item via `SMAppService` as appropriate for app packaging and installation method.
