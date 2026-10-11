@@ -25,7 +25,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var customBufferFrames: UInt32?
     @Published private(set) var inputTrim: Double = 0
     @Published private(set) var outputGain: Double = 0
-    @Published private(set) var matrix = ChannelMatrix.identity
     @Published private(set) var auChain = AUChain()
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
@@ -76,16 +75,10 @@ final class AppModel: ObservableObject {
         return routeReadiness
     }
     var canStopRouting: Bool { routingRequested || routingTransitioning || routingFault != nil }
+    var stoppedByUser: Bool { manuallyStopped }
 
     init() {
         let preferences = UserDefaults.standard
-        if let data = preferences.data(forKey: "AudioBridge.matrix") {
-            do {
-                let saved = try JSONDecoder().decode(ChannelMatrix.self, from: data)
-                guard saved.isValid else { throw AUError("Invalid saved channel matrix.") }
-                matrix = saved
-            } catch { self.error = "Saved matrix requires attention; existing data retained."; canSave = false }
-        }
         if let data = preferences.data(forKey: "AudioBridge.auCatalogCache"), data.count <= 8 * 1024 * 1024 {
             do {
                 let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate()
@@ -115,10 +108,10 @@ final class AppModel: ObservableObject {
         refresh()
         if auCatalogScannedAt == nil { refreshAudioUnits() }
     }
-    var inputIssue: String? { selection.input.issue(in: catalog.devices, direction: .input) }
-    var outputIssue: String? { selection.output.issue(in: catalog.devices, direction: .output) }
+    var inputIssue: String? { selection.issue(in: catalog.devices, direction: .input) }
+    var outputIssue: String? { selection.issue(in: catalog.devices, direction: .output) }
     var status: String {
-        if routingFault != nil { return "Action required" }
+        if routingFault != nil || error != nil { return "Action required" }
         if routingTransitioning { return routingRequested ? "Starting" : "Stopping" }
         if routingRequested {
             if let snapshot = engineSnapshot, !snapshot.primed, snapshot.rebufferEvents > 0 {
@@ -131,12 +124,15 @@ final class AppModel: ObservableObject {
                 || snapshot.bufferedFrames == 0 || snapshot.formatFaults > 0 {
                 return "Experimental routing — buffer glitches"
             }
+            if !snapshot.inputActive || !snapshot.outputActive { return "Experimental routing — callback gap" }
             return "Experimental routing active"
         }
         if manuallyStopped { return "Stopped" }
         if error != nil { return "Action required" }
         if selection.input.uid == nil || selection.output.uid == nil { return "Unconfigured" }
         if inputIssue != nil || outputIssue != nil { return "Selection requires attention" }
+        if permission != "Granted" { return "Microphone permission required" }
+        if routeReadiness != nil { return "Selected format requires attention" }
         return "Devices selected — ready for experimental routing"
     }
     var permissionCanBeRequested: Bool {
@@ -152,22 +148,66 @@ final class AppModel: ObservableObject {
     func selectUID(_ uid: String, direction: AudioDirection) {
         var next = selection
         let endpoint = EndpointSelection(uid: uid.isEmpty ? nil : uid)
-        if direction == .input { next.input = endpoint } else { next.output = endpoint }
+        if direction == .input { next.input = endpoint; next.inputMix = [] } else { next.output = endpoint; next.outputMap = [] }
         commit(next)
     }
-    func selectChannel(_ channel: Int, lane: Int, direction: AudioDirection) {
-        var next = selection
-        var endpoint = self.endpoint(direction)
-        if lane == 1 { endpoint.lane1 = channel == 0 ? nil : channel }
-        else { endpoint.lane2 = channel == 0 ? nil : channel }
-        if direction == .input { next.input = endpoint } else { next.output = endpoint }
-        commit(next)
+    var canEditPatches: Bool { canSave && !routingTransitioning && !changingDeviceBuffer }
+    func setInputPatch(channel: Int, left: Double, right: Double) {
+        guard canEditPatches, InputPatch(channel: channel, left: left, right: right).isValid,
+              device(.input)?.input.physicalChannels.contains(channel) == true else { return }
+        var next = selection; next.inputMix.removeAll { $0.channel == channel }
+        if left > 0 || right > 0 { next.inputMix.append(InputPatch(channel: channel, left: left, right: right)) }
+        commitPatches(next)
     }
-    func duplicateMonoInput() {
-        guard let channels = device(.input)?.input.physicalChannels, channels.count == 1 else { return }
+    func setOutputPatch(channel: Int, source: StereoSource) {
+        guard canEditPatches, device(.output)?.output.physicalChannels.contains(channel) == true else { return }
+        var next = selection; next.outputMap.removeAll { $0.channel == channel }
+        if source != .off { next.outputMap.append(OutputPatch(channel: channel, source: source)) }
+        commitPatches(next)
+    }
+    func inputPreset(mono: Bool) {
+        guard canEditPatches, let channels = device(.input)?.input.physicalChannels, let first = channels.first else { return }
         var next = selection
-        next.input.lane1 = channels[0]; next.input.lane2 = channels[0]
-        commit(next)
+        if mono { next.inputMix = [InputPatch(channel: first, left: 1, right: 1)] }
+        else {
+            guard channels.count >= 2 else { return }
+            next.inputMix = [InputPatch(channel: first, left: 1), InputPatch(channel: channels[1], right: 1)]
+        }
+        commitPatches(next)
+    }
+    func outputStereoPreset() {
+        guard canEditPatches, let channels = device(.output)?.output.physicalChannels, channels.count >= 2 else { return }
+        var next = selection
+        next.outputMap = [OutputPatch(channel: channels[0], source: .left), OutputPatch(channel: channels[1], source: .right)]
+        commitPatches(next)
+    }
+    func clearPatches(_ direction: AudioDirection) {
+        var next = selection
+        if direction == .input { next.inputMix = [] } else { next.outputMap = [] }
+        commitPatches(next)
+    }
+    func removeMissingPatch(channel: Int, direction: AudioDirection) {
+        var next = selection
+        if direction == .input { next.inputMix.removeAll { $0.channel == channel } }
+        else { next.outputMap.removeAll { $0.channel == channel } }
+        commitPatches(next)
+    }
+    private func commitPatches(_ next: RouteSelection) {
+        guard canEditPatches, next.patchesValid else { return }
+        do {
+            try store.save(next); selection = next; error = nil
+            if routingRequested {
+                let generation = routingGeneration
+                engine.setRouting(next) { [weak self] result in
+                    Task { @MainActor in
+                        guard let self, self.routingGeneration == generation, self.routingRequested else { return }
+                        if case .failure(let error) = result {
+                            self.stopRouting(); self.routingFault = "Routing change failed: \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
+        } catch { self.error = "Unable to save routing: \(error.localizedDescription)" }
     }
     private func commit(_ next: RouteSelection) {
         guard canEditSelections else { return }
@@ -182,7 +222,7 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, matrix: matrix, updated: { [weak self] snapshot in
+                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -260,13 +300,6 @@ final class AppModel: ObservableObject {
         if direction == .input { inputTrim = decibels } else { outputGain = decibels }
         UserDefaults.standard.set(decibels, forKey: direction == .input ? "AudioBridge.inputTrim" : "AudioBridge.outputGain")
         engine.setGains(inputTrim: inputTrim, outputGain: outputGain)
-    }
-    func setMatrix(_ next: ChannelMatrix) {
-        guard canSave, next.isValid else { return }
-        do {
-            UserDefaults.standard.set(try JSONEncoder().encode(next), forKey: "AudioBridge.matrix")
-            matrix = next; engine.setMatrix(next)
-        } catch { self.error = "Unable to save channel matrix: \(error.localizedDescription)" }
     }
     var routePlan: Phase2Plan? {
         try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile, bufferFrames: customBufferFrames)
@@ -545,5 +578,36 @@ final class AppModel: ObservableObject {
                 permissionContext: "AudioBridge.app; authorization status only, audio capture not tested.")
             try encoder.encode(report).write(to: url, options: .atomic)
         } catch { self.error = "Unable to export device facts: \(error)" }
+    }
+    func copyStatus() {
+        var lines = ["Audio Bridge status",
+            "Version: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") / build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development")",
+            "Time: \(ISO8601DateFormatter().string(from: Date()))",
+            "Bundle: \(Bundle.main.bundlePath)", "Status: \(status)", "Microphone permission: \(permission)",
+            "Routing requested: \(routingRequested); transitioning: \(routingTransitioning)"]
+        if let routingFault { lines.append("Routing fault: \(routingFault)") }
+        if let error { lines.append("Settings error: \(error)") }
+        if let startUnavailableReason, !routingRequested { lines.append("Start unavailable: \(startUnavailableReason)") }
+        for direction in AudioDirection.allCases {
+            let selected = endpoint(direction), selectedDevice = device(direction)
+            let rate = (selectedDevice?.nominalSampleRate).map { String($0) } ?? "unknown"
+            let frames = (selectedDevice?.bufferFrames).map { String($0) } ?? "unknown"
+            lines.append("\(direction.rawValue.capitalized): \(selectedDevice?.name ?? "Unavailable/unconfigured") [UID: \(selected.uid ?? "none")] · rate \(rate) Hz · buffer \(frames) frames")
+        }
+        lines.append("Input matrix: " + selection.inputMix.map { "ch\($0.channel) → L \($0.left), R \($0.right)" }.joined(separator: "; "))
+        lines.append("Output map: " + selection.outputMap.map { "ch\($0.channel) ← \($0.source.label)" }.joined(separator: "; "))
+        lines.append("AU chain bypassed: \(chainBypassed); effects: " + auChain.effects.map { "\($0.name) [\($0.enabled ? "enabled" : "disabled")]" }.joined(separator: " → "))
+        if let s = engineSnapshot {
+            lines += ["Input/output callbacks: \(s.inputCallbacks) / \(s.outputCallbacks)",
+                "Captured/rendered frames: \(s.inputFrames) / \(s.outputFrames); AU processed: \(s.auProcessedFrames)",
+                "Callbacks fresh input/output: \(s.inputActive) / \(s.outputActive); primed: \(s.primed)",
+                "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); startup fill: \(s.targetFrames)",
+                "Underrun/overrun: \(s.underrunFrames) / \(s.overrunFrames); format faults: \(s.formatFaults)",
+                "Drift commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
+                "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
+        } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }
+        lines.append("Local diagnostics only; no audio samples or plugin state included.")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
 }

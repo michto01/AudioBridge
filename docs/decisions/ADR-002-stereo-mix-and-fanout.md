@@ -4,7 +4,7 @@ Status: Accepted by the user, 2026-10-11
 
 ## Decision
 
-Replace the two selected input lanes and post-effect 2×2 matrix with an expandable N×2 input matrix. Rows are physical channels of one explicitly selected Core Audio input UID; columns are Mix L and Mix R. Each cell has a linear amplitude coefficient, initially 0–1, with smooth live changes and no hidden normalization. Mono (1×2) and stereo (2×2) presets are the simple defaults, applied explicitly by the operator.
+Replace the two selected input lanes and post-effect 2×2 matrix with an expandable N×2 input matrix. Rows are physical channels of one explicitly selected Core Audio input UID; columns are Mix L and Mix R. Each cell has a linear amplitude coefficient, 0–2 (1 is unity; the upper bound preserves legacy duplicated-input sums), with smooth live changes and no hidden normalization. Mono (1×2) and stereo (2×2) presets are the simple defaults, applied explicitly by the operator.
 
 Processing order: physical inputs → N×2 mix → linked input trim → stereo AU chain (or explicit dry bypass) → stereo adaptive drift resampler → linked output gain → physical output fan-out.
 

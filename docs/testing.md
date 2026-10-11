@@ -60,3 +60,9 @@ Installed AU follow-up: `AUChainTests.swift` has serialization/validation and sh
 ## Reporting template
 
 For each test record: test ID, OS/architecture, input/output UID and format, build SHA, steps, expected, observed, metrics/log attachment, pass/fail/not-run, and issue link. Do not mark simulated tests as evidence of hardware compatibility.
+
+## ADR-002 routing extension (execution deferred)
+
+`StereoRoutingTests.swift` adds N×2 summation/headroom, duplicate/invalid patches, backed-up v1 migration (including duplicate-channel sums), missing physical indices, multi-stream planar/interleaved addressing, C stereo fan-out/Off silence and local status classification. These sources have not been compiled or run. Add coherent live-publication/ramp stress tests, malformed/null/unequal-frame buffer lists, and nonfinite physical capture before the gate.
+
+Manual acceptance: mono and stereo defaults; more than two inputs; duplicated L/R output pairs; explicit mono and headroom; Aggregate Device subdevice clock configuration; actual physical numbering; live connect/disconnect/gain; state after relaunch; AU before/after mixing placement; Copy status after a fault; visible menu colours and VoiceOver. Validate CPU, latency, drift, callbacks and partial device/layout changes on stated hardware. Earlier historical test results do not pass this extension.

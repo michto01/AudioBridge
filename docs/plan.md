@@ -29,7 +29,7 @@ Implementation status: device catalog, listeners, UID/channel persistence, permi
 
 ## Phase 2 — Minimal audio path
 
-Implementation status: experimental manual HAL input/output path, C callback ownership, bounded stereo FIFO and Float32 layout normalization implemented. Compiled and packaged; new automated tests written but not run. Live audio checks deferred at user request. Integer PCM, multiple streams and same-device duplex routing remain prerequisites for broader compatibility. See [Phase 2 results](phase-2-results.md). Stop for review before Phase 3; the audio acceptance gate remains pending.
+Implementation status: experimental manual HAL input/output path, C callback ownership, bounded stereo FIFO and Float32 layout normalization implemented. Compiled and packaged; new automated tests written but not run. Live audio checks deferred at user request. Integer PCM and same-device duplex routing remain prerequisites for broader compatibility. See [Phase 2 results](phase-2-results.md). Stop for review before Phase 3; the audio acceptance gate remains pending.
 
 - Implement independent HAL capture/output, safe callback lifecycle and a preallocated FIFO.
 - Support a verified internal PCM representation and explicitly convert device formats.
@@ -39,7 +39,7 @@ Implementation status: experimental manual HAL input/output path, C callback own
 
 ## Phase 3 — Drift, DSP and meters
 
-Approved extension: [ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md). Implement N×2 physical input mixing before the stereo AU/drift path, output L/R fan-out within one output device, versioned migration and routing grids. Follow with menu-bar status colours and compact UX. Mono/stereo presets remain the default workflow. Stop for review before supervisor/login work; previous and new automated/hardware gates remain pending.
+Approved extension: [ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md). N×2 physical input mixing before the stereo AU/drift path, output L/R fan-out within one output device, versioned migration and routing grids are implemented in 0.3.1/build 10, with menu-bar status colours, Copy status and compact UX. Implementation evidence is in [routing extension results](stereo-routing-results.md). Mono/stereo presets remain the default workflow. Stop for review before supervisor/login work; previous and new automated/hardware gates remain pending.
 
 User-authorized preliminary slices: local signal meters, compact FIFO buffer settings, smooth digital input trim and output gain implemented to support manual Phase 2 routing checks. See [audio settings follow-up](audio-settings-results.md) and [buffer/gain follow-up](buffer-gain-results.md). The next authorized slice implements adaptive drift resampling and a persisted live matrix; see [Phase 3 results](phase-3-results.md). Builds and bundle checks pass; automated and hardware gates remain pending under the user instruction. Stop for review before Phase 4. User reported microphone routing working after refreshing permission, not a completed stereo signal or drift test.
 

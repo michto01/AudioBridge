@@ -15,8 +15,8 @@ struct SignalMeters: View {
                 let level = levels?[lane]
                 let db = level?.decibels ?? -.infinity
                 HStack(spacing: 8) {
-                    Text("\(direction == .input ? "In" : "Out") \(lane + 1)")
-                        .font(.caption).frame(width: 40, alignment: .leading)
+                    Text("\(direction == .input ? "Mix" : "Out") \(lane == 0 ? "L" : "R")")
+                        .font(.caption).frame(width: 44, alignment: .leading)
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
                             Capsule().fill(.quaternary)
@@ -115,6 +115,6 @@ struct GainControl: View {
             Button { model.setGain(0, direction: direction) } label: { Image(systemName: "arrow.uturn.backward") }
                 .help("Reset to 0 dB")
         }
-        .help("Digital gain, −60 to +12 dB. Both lanes change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged.")
+        .help("Digital gain, −60 to +12 dB. Both stereo channels change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged.")
     }
 }

@@ -13,7 +13,7 @@ struct AudioBridgeApp: App {
         MenuBarExtra {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.headline)
-                Label(model.status, systemImage: "info.circle")
+                RoutingStatusLabel(model: model)
                 Text("Experimental adaptive routing; hardware validation pending.").foregroundStyle(.secondary)
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
@@ -32,10 +32,13 @@ struct AudioBridgeApp: App {
                     SettingsLink { Text("Settings…") }
                     Button("Quit") { model.quit() }
                 }
+                Button("Copy status") { model.copyStatus() }.font(.caption)
             }
             .padding().frame(width: 380)
         } label: {
-            Label("Audio Bridge — \(model.status)", systemImage: "waveform")
+            Image(nsImage: MenuStatusIcon.image(model.activity)).renderingMode(.original)
+                .accessibilityLabel("Audio Bridge — \(model.status)")
+                .help("Audio Bridge — \(model.status)")
         }
         .menuBarExtraStyle(.window)
         Settings {
@@ -67,11 +70,11 @@ private struct SettingsView: View {
         TabView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Experimental adaptive routing and matrix. Recovery is not implemented; use for attended checks only.")
+                    Text("Experimental routing · automatic recovery is not implemented.")
                         .foregroundStyle(.secondary)
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
-                    Text(model.status).font(.headline)
+                    RoutingStatusLabel(model: model).font(.headline)
                     HStack {
                         Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
                         Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
@@ -82,7 +85,6 @@ private struct SettingsView: View {
                     endpointPicker(.input)
                     endpointPicker(.output)
                     AUEffectsView(model: model)
-                    MatrixSettings(model: model)
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -98,12 +100,23 @@ private struct SettingsView: View {
                     Button(model.refreshing ? "Refreshing…" : "Refresh devices and permission") { model.refresh() }
                         .disabled(model.refreshing)
                     if model.routingRequested || model.routingTransitioning {
-                        Text("Stop routing to change devices or channels.").font(.caption)
+                        Text("Stop routing to change devices. Routing grid and gains can change live.").font(.caption)
                     }
                     Text("Automatic recovery and login controls are not yet implemented.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }.tabItem { Label("Audio", systemImage: "waveform") }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    RoutingStatusLabel(model: model).font(.headline)
+                    HStack {
+                        Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
+                        Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
+                        Text("Patches and cell gains can change live.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    MatrixSettings(model: model)
+                }.padding()
+            }.tabItem { Label("Routing", systemImage: "point.3.connected.trianglepath.dotted") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Launch at login and automatic routing are not yet implemented.")
                 Text("Device UIDs and explicit physical channels are saved on this Mac. A missing endpoint is never replaced with the system default.")
@@ -122,11 +135,13 @@ private struct SettingsView: View {
                         Text("Rebuffer events: \(metrics.rebufferEvents) · recentered frames discarded: \(metrics.recenterFrames)")
                         Text("Input clipped samples: \(metrics.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                         Text("Output clipped samples: \(metrics.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
+                        Text("Physical output peak: \(metrics.physicalOutputPeak.formatted()) · full-scale samples: \(metrics.physicalOutputClips)")
                         Text("Raw input full-scale samples: \(metrics.rawInputClips.map(String.init).joined(separator: " / "))")
                     }
                     Text("Microphone permission: \(model.permission)")
                     HStack {
                         Button("Refresh") { model.refresh() }.disabled(model.refreshing)
+                        Button("Copy status") { model.copyStatus() }
                         Button("Export device facts…") { model.exportProbe() }
                     }
                     Text("Export contains device identifiers and technical properties, never audio samples.")
@@ -181,14 +196,6 @@ private struct SettingsView: View {
                         Text("Selected device unavailable").tag(uid)
                     }
                 }.disabled(!model.canEditSelections)
-                HStack {
-                    channelPicker(direction, lane: 1, channels: device?.facts(for: direction).physicalChannels ?? [])
-                    channelPicker(direction, lane: 2, channels: device?.facts(for: direction).physicalChannels ?? [])
-                }.disabled(!model.canEditSelections)
-                if direction == .input, device?.input.physicalChannels.count == 1 {
-                    Button("Use mono input for In 1 and In 2") { model.duplicateMonoInput() }
-                        .disabled(!model.canEditSelections)
-                }
                 GainControl(model: model, direction: direction)
                 SignalMeters(model: model, direction: direction)
                 if direction == .input, let raw = model.engineSnapshot?.rawInputClips, raw.contains(where: { $0 > 0 }) {
@@ -203,27 +210,9 @@ private struct SettingsView: View {
                         Text("Supported buffer range: \(range.minimum.formatted())–\(range.maximum.formatted()) frames").font(.caption)
                     }
                 }
-                if let issue = selected.issue(in: model.catalog.devices, direction: direction) { Text(issue).font(.caption) }
-                if selected.lane1 != nil && selected.lane1 == selected.lane2 {
-                    Text(direction == .input
-                        ? "In 1 and In 2 use the same physical input channel (mono duplication)."
-                        : "Out 1 and Out 2 sum into one physical channel. Full-level inputs can clip.")
-                        .font(.caption)
-                }
+                if let issue = direction == .input ? model.inputIssue : model.outputIssue { Text(issue).font(.caption) }
             }.padding(6)
         }
-    }
-    private func channelPicker(_ direction: AudioDirection, lane: Int, channels: [Int]) -> some View {
-        let selection = model.endpoint(direction)
-        let channel = (lane == 1 ? selection.lane1 : selection.lane2) ?? 0
-        return Picker("\(direction == .input ? "In" : "Out") \(lane)", selection: Binding(
-            get: { let selected = model.endpoint(direction); return (lane == 1 ? selected.lane1 : selected.lane2) ?? 0 },
-            set: { model.selectChannel($0, lane: lane, direction: direction) }
-        )) {
-            Text("Choose channel…").tag(0)
-            ForEach(channels, id: \.self) { Text("Physical channel \($0)").tag($0) }
-            if channel != 0 && !channels.contains(channel) { Text("Unavailable channel \(channel)").tag(channel) }
-        }.disabled(model.endpoint(direction).uid == nil)
     }
     private func deviceDetails(_ device: DeviceFacts) -> some View {
         VStack(alignment: .leading, spacing: 5) {

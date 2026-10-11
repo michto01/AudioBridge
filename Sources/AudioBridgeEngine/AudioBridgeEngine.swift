@@ -29,6 +29,8 @@ public struct EngineSnapshot: Sendable {
     public let driftPPM: Float
     public let recenterFrames: UInt64
     public let rebufferEvents: UInt64
+    public let physicalOutputPeak: Float
+    public let physicalOutputClips: UInt64
 }
 
 public struct MeterLevel: Sendable {
@@ -60,7 +62,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, matrix: ChannelMatrix = .identity,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -71,12 +73,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 let fresh = try CoreAudioCatalog.snapshot()
                 let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames)
                 guard let created = ABEngineCreate(next.input.device.runtimeID, next.output.device.runtimeID,
-                    next.input.layout, next.output.layout, next.capacity, next.prefill) else {
+                    next.capacity, next.prefill) else {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next
-                guard matrix.isValid, ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift or matrix configuration.") }
-                ABEngineSetMatrix(created, Float(matrix.a), Float(matrix.b), Float(matrix.c), Float(matrix.d))
+                let routing = try Self.makeRouting(next, selection: selection)
+                guard ABEngineAttachRouting(created, routing) else { ABRoutingDestroy(routing); throw AUError("Unable to attach physical channel routing.") }
+                guard ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift configuration.") }
                 do {
                     guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
                     auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass, cancelled: { [self] in
@@ -117,11 +120,43 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             ABEngineSetGains(context, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain))
         }
     }
-    public func setMatrix(_ matrix: ChannelMatrix) {
-        guard matrix.isValid else { return }
+    private static func makeRouting(_ plan: Phase2Plan, selection: RouteSelection) throws -> OpaquePointer {
+        let ig = plan.input.inputGains(selection), og = plan.output.outputGains(selection)
+        // C copies topology/coefficients synchronously. Swift arrays never escape into callbacks.
+        let routing = plan.input.addresses.withUnsafeBufferPointer { ia in
+            plan.input.bufferChannels.withUnsafeBufferPointer { ib in
+                ig.withUnsafeBufferPointer { gains in
+                    plan.output.addresses.withUnsafeBufferPointer { oa in
+                        plan.output.bufferChannels.withUnsafeBufferPointer { ob in
+                            og.withUnsafeBufferPointer { outputs in
+                                ABRoutingCreate(ia.baseAddress, UInt32(ia.count), ib.baseAddress, UInt32(ib.count), gains.baseAddress,
+                                    oa.baseAddress, UInt32(oa.count), ob.baseAddress, UInt32(ob.count), outputs.baseAddress)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        guard let routing else { throw AUError("Unable to allocate validated physical channel routing.") }
+        return routing
+    }
+    public func setRouting(_ selection: RouteSelection, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         queue.async { [self] in
-            guard let context else { return }
-            ABEngineSetMatrix(context, Float(matrix.a), Float(matrix.b), Float(matrix.c), Float(matrix.d))
+            do {
+                guard let context, let plan else { completion(.success(())); return }
+                guard selection.patchesValid, selection.input.uid == plan.input.device.uid,
+                      selection.output.uid == plan.output.device.uid,
+                      selection.inputMix.allSatisfy({ plan.input.physicalChannels.contains($0.channel) }),
+                      selection.outputMap.allSatisfy({ plan.output.physicalChannels.contains($0.channel) }) else {
+                    throw AUError("Live routing does not match the prepared device channels.")
+                }
+                let input = plan.input.inputGains(selection), output = plan.output.outputGains(selection)
+                let applied = input.withUnsafeBufferPointer { i in output.withUnsafeBufferPointer { o in
+                    ABEngineSetRouting(context, i.baseAddress, UInt32(i.count / 2), o.baseAddress, UInt32(o.count / 2))
+                } }
+                guard applied else { throw AUError("Live routing publication failed.") }
+                completion(.success(()))
+            } catch { completion(.failure(error)) }
         }
     }
     public func auCommand(_ command: AULiveCommand, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
@@ -157,15 +192,20 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         previousInputCallbacks = metrics.inputCallbacks; previousOutputCallbacks = metrics.outputCallbacks
         var fault: String?
         if let auFault = auHost?.fault() { fault = auFault }
-        if metrics.formatFaults > 0 { fault = "Audio buffer layout changed or became invalid. Refresh devices and start again." }
-        else if elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
+        if fault == nil, metrics.formatFaults > 0 { fault = "Audio buffer layout changed or became invalid. Refresh devices and start again." }
+        else if fault == nil, elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (!metrics.primed && metrics.rebufferEvents == 0)) {
-            fault = "Selected devices are not delivering confirmed callbacks and buffers. Check devices and microphone permission."
+            let missing = [
+                lastInputActivity.map { now.timeIntervalSince($0) <= 2 } == true ? nil : "input callbacks",
+                lastOutputActivity.map { now.timeIntervalSince($0) <= 2 } == true ? nil : "output callbacks",
+                metrics.primed ? nil : "processed startup buffer"
+            ].compactMap { $0 }.joined(separator: ", ")
+            fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auHost?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
         // A stale/failed probe makes this experimental path stop safely; recovery is a later phase.
-        if Date().timeIntervalSince(lastDeviceCheck) >= 0.5 {
+        if fault == nil, Date().timeIntervalSince(lastDeviceCheck) >= 0.5 {
           lastDeviceCheck = Date()
           do {
             let fresh = try CoreAudioCatalog.snapshot()
@@ -196,7 +236,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             capacity: plan.capacity, targetFrames: plan.prefill,
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
             auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse,
-            driftPPM: metrics.driftPPM, recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents)
+            driftPPM: metrics.driftPPM, recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
+            physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {

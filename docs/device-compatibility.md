@@ -6,7 +6,9 @@ Audio Bridge routes between two independently chosen Core Audio endpoints exposi
 
 ## V1 channel semantics
 
-Two logical input lanes (`in1`, `in2`) and two logical output lanes (`out1`, `out2`) are bound to explicitly selected device channel indices. A 2×2 matrix mixes logical lanes. A multi-channel interface can be used by selecting two channels; the remaining channels are untouched where device I/O permits. If a device is mono, expose a clearly labelled mono duplication option, or explain why the selected route cannot run. No implicit channel remapping.
+[ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md) supersedes the original two-lane restriction. Any explicitly patched physical channels on one input UID mix into stereo (N×2). A stereo AU/drift path feeds one output UID, with L or R copied to any number of physical outputs; L+R is explicit and can clip. Mono (1×2) and stereo (2×2) presets are simple defaults. Physical indices are never implicitly renumbered, including non-contiguous aggregate indices. Missing patches remain visible/actionable.
+
+The current implementation supports validated native packed Float32 multi-stream interleaved/planar layouts at equal current device rates; other PCM and same-device duplex remain unfinished. Aggregate subdevice clocks/drift settings belong to macOS and the operator; app-level drift compensates between the selected endpoints, not each subdevice. Best-effort eligibility is not a hardware compatibility claim.
 
 ## Capability discovery
 

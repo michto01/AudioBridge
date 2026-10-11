@@ -2,7 +2,7 @@
 
 ## Problem
 
-Audio Bridge is a universal native macOS utility for unattended routing between independently selected Core Audio input and output devices, which may use different hardware clocks. Version 1 supports selecting two source channels and two destination channels and applying a 2×2 mixing matrix. Built-in, USB, Thunderbolt, and virtual PCM devices are eligible based on capabilities; no hardware brand or transport is required.
+Audio Bridge is a universal native macOS utility for unattended routing between independently selected Core Audio input and output devices, which may use different hardware clocks. Version 1 supports N physical inputs mixed into stereo, a stereo AU/drift path and L/R fan-out within one selected output device (ADR-002). Built-in, USB, Thunderbolt, and virtual PCM devices are eligible based on capabilities; no hardware brand or transport is required.
 
 ## Product outcome
 
@@ -18,7 +18,7 @@ A small, reliable, native macOS menu-bar utility with no cloud dependency and no
 | P-04 | Auto-launch at user login and auto-start when configured devices are available. |
 | P-05 | Manual Stop suppresses recovery and auto-start until user explicitly starts again; persistence across app relaunch is specified in design. |
 | P-06 | Recover indefinitely from recoverable device loss with bounded retry intervals. |
-| P-07 | Full 2×2 linear amplitude matrix with stereo, mono and swap presets; smooth changes. |
+| P-07 | N×2 input matrix with mono/stereo defaults and smooth changes; stereo processing and physical output fan-out (ADR-002). |
 | P-08 | Output gain, input/output peak meters and clipping/overrun/underrun counters. |
 | P-09 | No silence alerts or notifications; silence is an informational meter condition only. |
 | P-10 | Menu-bar popover and separate settings window; closing windows does not stop routing. |
@@ -28,7 +28,7 @@ A small, reliable, native macOS menu-bar utility with no cloud dependency and no
 
 ## Non-goals for v1
 
-EQ, compressor, limiter, audio recording, network-audio protocol stacks, vendor-specific device APIs, more than two simultaneously routed channels, remote control, unattended system-daemon operation, automatic switching to alternate outputs, and a paid signing dependency.
+Built-in EQ, compressor, limiter (installed AU hosting is explicitly authorized), audio recording, network-audio protocol stacks, vendor-specific device APIs, arbitrary multichannel effects or independently opened multiple output devices, remote control, unattended system-daemon operation, automatic switching to alternate outputs, and a paid signing dependency.
 
 ## Operating constraints
 
@@ -46,7 +46,7 @@ EQ, compressor, limiter, audio recording, network-audio protocol stacks, vendor-
 
 ## Open decisions
 
-- Exact matrix coefficient range and normalization/headroom policy: provisional 0.0–1.0 per coefficient, with optional future signed/negative coefficients. Default stereo identity.
+- Exact matrix coefficient range and normalization/headroom policy: 0.0–2.0 per coefficient, 1.0 is unity (legacy duplicate-input sums may exceed 1), with optional future signed/negative coefficients. Explicit mono/stereo presets.
 - Positive digital gain: provisionally cap at +12 dB; protect against clipping through indication, not a hidden limiter.
 - Latency profiles: Low, Balanced (default), Robust; exact buffer sizes determined by device measurements.
 - User-initiated Stop: recommended persisted `desiredRouting=false` across relaunch; explicit auto-start preference is only applied on first setup or when desired state is enabled. Document and test this carefully.

@@ -7,10 +7,16 @@ public struct Phase2Plan: Sendable {
     public struct Endpoint: Sendable {
         public let device: DeviceFacts
         public let format: StreamFormat
-        public let lane1: UInt32
-        public let lane2: UInt32
-        var layout: ABLayout {
-            ABLayout(channels: format.channels, lane1: lane1, lane2: lane2, planar: format.isNonInterleaved)
+        public let physicalChannels: [Int]
+        public let addresses: [ABChannelAddress]
+        public let bufferChannels: [UInt32]
+        public func inputGains(_ selection: RouteSelection) -> [Float] {
+            let patches = Dictionary(uniqueKeysWithValues: selection.inputMix.map { ($0.channel, $0) })
+            return physicalChannels.flatMap { [Float(patches[$0]?.left ?? 0), Float(patches[$0]?.right ?? 0)] }
+        }
+        public func outputGains(_ selection: RouteSelection) -> [Float] {
+            let patches = Dictionary(uniqueKeysWithValues: selection.outputMap.map { ($0.channel, $0.source) })
+            return physicalChannels.flatMap { let pair = (patches[$0] ?? .off).gains; return [pair.0, pair.1] }
         }
     }
     public let input: Endpoint
@@ -21,6 +27,8 @@ public struct Phase2Plan: Sendable {
     public let auBlockFrames: UInt32
 
     public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced, bufferFrames: UInt32? = nil) throws {
+        if let issue = selection.issue(in: devices, direction: .input) { throw PlanError(issue) }
+        if let issue = selection.issue(in: devices, direction: .output) { throw PlanError(issue) }
         input = try Self.endpoint(selection.input, direction: .input, devices: devices)
         output = try Self.endpoint(selection.output, direction: .output, devices: devices)
         guard input.device.uid != output.device.uid else {
@@ -45,36 +53,43 @@ public struct Phase2Plan: Sendable {
     }
     private static func endpoint(_ selection: EndpointSelection, direction: AudioDirection,
                                  devices: [DeviceFacts]) throws -> Endpoint {
-        if let issue = selection.issue(in: devices, direction: direction) { throw PlanError(issue) }
-        guard let device = devices.first(where: { $0.uid == selection.uid }),
-              let lane1 = selection.lane1, let lane2 = selection.lane2 else {
-            throw PlanError("Choose both devices and physical lanes.")
+        guard let device = devices.first(where: { $0.uid == selection.uid }), device.alive == true else {
+            throw PlanError("Choose an available device explicitly.")
         }
         let facts = device.facts(for: direction)
-        guard facts.streams.count == 1, let stream = facts.streams.first,
-              let start = stream.startingChannel, let format = stream.virtualFormat else {
-            throw PlanError("The initial path needs one confirmed PCM stream per direction. Multiple-stream routing is not implemented.")
+        guard !facts.streams.isEmpty, facts.streams.count <= 4096 else { throw PlanError("No confirmed PCM stream topology.") }
+        var channels: [Int] = [], addresses: [ABChannelAddress] = [], buffers: [UInt32] = []
+        var first: StreamFormat?
+        var lastPhysical = 0
+        // Retain HAL stream order. Reject overlapping/reordered indices instead of guessing buffer identity.
+        for stream in facts.streams {
+            guard let start = stream.startingChannel, start > 0, Int(start) > lastPhysical,
+                  let format = stream.virtualFormat else { throw PlanError("Ambiguous stream/channel ordering; routing cannot be mapped safely.") }
+            guard format.isPCM, format.isFloat, format.isPacked, !format.isBigEndian,
+                  !format.isSignedInteger, format.bitsPerChannel == 32,
+                  format.channels > 0, format.channels <= 4096,
+                  channels.count + Int(format.channels) <= 4096,
+                  format.framesPerPacket == 1,
+                  format.bytesPerFrame == (format.isNonInterleaved ? 4 : format.channels * 4),
+                  format.bytesPerPacket == format.bytesPerFrame,
+                  format.sampleRate.isFinite, format.sampleRate > 0,
+                  device.nominalSampleRate == format.sampleRate else {
+                throw PlanError("Routing supports native-endian packed Float32 streams at the device rate, up to 4096 physical channels. This format needs an unimplemented conversion path.")
+            }
+            first = first ?? format
+            let buffer = UInt32(buffers.count)
+            for offset in 0..<format.channels {
+                channels.append(Int(start) + Int(offset))
+                addresses.append(ABChannelAddress(buffer: buffer + (format.isNonInterleaved ? offset : 0),
+                    offset: format.isNonInterleaved ? 0 : offset, stride: format.isNonInterleaved ? 1 : format.channels))
+            }
+            buffers += format.isNonInterleaved ? Array(repeating: UInt32(1), count: Int(format.channels)) : [format.channels]
+            lastPhysical = Int(start) + Int(format.channels) - 1
         }
-        guard format.isPCM, format.isFloat, format.isPacked, !format.isBigEndian,
-              !format.isSignedInteger, format.bitsPerChannel == 32,
-              format.channels > 0, format.channels <= 4096,
-              format.framesPerPacket == 1,
-              format.bytesPerFrame == (format.isNonInterleaved ? 4 : format.channels * 4),
-              format.bytesPerPacket == format.bytesPerFrame,
-              format.sampleRate.isFinite, format.sampleRate > 0,
-              device.nominalSampleRate == format.sampleRate else {
-            throw PlanError("The initial path supports native-endian packed Float32 PCM only. This format needs a conversion path that is not implemented yet.")
+        guard buffers == facts.bufferChannelCounts, facts.channelCount == channels.count, let format = first else {
+            throw PlanError("Reported IO buffers do not match the stream topology; routing cannot guess a layout.")
         }
-        let expectedBuffers = format.isNonInterleaved
-            ? Array(repeating: UInt32(1), count: Int(format.channels)) : [format.channels]
-        guard facts.bufferChannelCounts == expectedBuffers else {
-            throw PlanError("The reported IO buffer layout does not match the selected stream format.")
-        }
-        guard start > 0, lane1 >= Int(start), lane2 >= Int(start),
-              lane1 - Int(start) < Int(format.channels), lane2 - Int(start) < Int(format.channels) else {
-            throw PlanError("The selected physical channels do not belong to the confirmed stream.")
-        }
-        return Endpoint(device: device, format: format, lane1: UInt32(lane1 - Int(start)), lane2: UInt32(lane2 - Int(start)))
+        return Endpoint(device: device, format: format, physicalChannels: channels, addresses: addresses, bufferChannels: buffers)
     }
     public struct PlanError: Error, LocalizedError, Sendable {
         public let message: String

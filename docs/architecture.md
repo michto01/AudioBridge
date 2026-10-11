@@ -2,7 +2,7 @@
 
 ## User-authorized Audio Unit extension
 
-Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. Input trim precedes the chain; output gain follows it. The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed or stalled helpers stop routing; automatic recovery and drift compensation are still pending. See [implementation evidence and limits](au-hosting-results.md).
+Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. N×2 physical input mixing and input trim precede the chain; stereo adaptive drift processing and output gain follow it, then physical output fan-out (ADR-002). The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed or stalled helpers stop routing; automatic recovery remains pending; drift implementation requires acceptance. See [implementation evidence and limits](au-hosting-results.md).
 
 ## Logical components
 
@@ -20,14 +20,15 @@ CoreAudioDeviceManager (UID discovery, property listeners, format probe)
                 │
                 ▼
 AudioBridgeEngine
-  Input HAL callback → PCM normalization → bounded SPSC FIFO
-                                      ↓
-                  adaptive resampler / drift control
-                                      ↓
-                 2×2 matrix → smoothed gain → output HAL callback
-                │
-                ▼
-        independently selected output device
+  Input HAL → Float32 addressing → N×2 input mix → input trim
+                                                   ↓
+                              bounded stereo capture queue → stereo AU helper
+                                                   ↓
+                              bounded stereo output queue → adaptive drift FIR
+                                                   ↓
+                              output gain → physical L/R fan-out → Output HAL
+                                                   ↓
+                              one explicitly selected output UID
 ```
 
 The diagram is conceptual: precise order of format conversion, resampling and matrix depends on supported stream formats. Do not copy/allocate/lock in real-time callbacks; preallocate conversion buffers and initialize converters outside the callback.
@@ -35,7 +36,7 @@ The diagram is conceptual: precise order of format conversion, resampling and ma
 ## Interfaces and responsibilities
 
 - `AudioDeviceCatalog`: enumerate input/output devices, UIDs, names, channel capabilities, sample rates, buffer ranges, liveness, and property changes. Treat runtime `AudioDeviceID` as ephemeral.
-- `BridgeConfiguration`: versioned, codable settings: selected UIDs, 2×2 matrix, gain, latency profile, desired routing, login option and diagnostics options. Validate before committing.
+- `BridgeConfiguration`: versioned, codable settings: selected UIDs, versioned physical input/output patches, gain, latency profile, desired routing, login option and diagnostics options. Validate before committing.
 - `BridgeSupervisor`: serialized commands `start`, `stop`, `reconfigure`, `deviceChanged`, `engineFault`, `retry`; publishes immutable `BridgeSnapshot` for UI.
 - `AudioBridgeEngine`: `prepare(config, devices)`, `start`, `stop`, `teardown`, diagnostics snapshots. No SwiftUI references.
 - `AudioProcessor`: pure testable matrix/gain DSP, resampler and ring-buffer primitives.
@@ -57,10 +58,10 @@ The diagram is conceptual: precise order of format conversion, resampling and ma
 
 Two independent clock domains require an elastic buffer and resampling or equivalent drift correction. A simple FIFO alone is insufficient for indefinite operation. Use preallocated single-producer/single-consumer ring storage, clear memory ordering, explicit underrun/overrun behavior and no hidden allocations in callbacks. Prefer C/C++ or carefully audited Swift for callback-critical structures if ARC/Swift exclusivity/runtime behavior complicates hard real-time guarantees; keep app orchestration in Swift.
 
-- Input callback: copy/convert frames into FIFO; update lock-free counters; never block on output.
-- Output callback: consume/resample to requested output frame count; process matrix/gain; output silence on starvation; no UI calls.
+- Input callback: address validated physical streams, mix N inputs into stereo and apply trim before FIFO; update lock-free counters; never block on output.
+- Output callback: consume/resample to requested output frame count; apply output gain and physical stereo fan-out; output silence on starvation; no UI calls.
 - Drift controller: track smoothed FIFO occupancy vs target, bound resampling correction (ppm limit to be tuned), detect outliers and perform controlled re-centering when necessary.
-- Channel layout: explicit 2-channel input and output contract. Handle other device channel counts only through validated selection/mapping or reject clearly.
+- Channel layout: N×2 input mix, stereo processing and output fan-out per ADR-002; validate actual stream order/buffers and preserve physical indices. Integer PCM and same-device duplex remain pending.
 - Formats: support common Core Audio float/int PCM and planar/interleaved layouts through a tested conversion layer; do not assume `Float32` non-interleaved on every device.
 - Metering: peak or peak+RMS accumulated in callback-safe structures, polled by UI at a modest rate (e.g. 10–20 Hz); report dBFS and clipping counts. Meters reflect local samples, not reception at downstream hardware.
 - Gain/matrix updates: smooth ramps at audio rate to avoid clicks; define coefficient range and clipping policy.
@@ -87,8 +88,7 @@ Create a small CLI tool or diagnostics screen that lists UIDs, transport types, 
 - The product is a **Core Audio PCM device bridge**, not a Dante or USB adapter utility. No device brand, model, transport, or downstream mixer is a required dependency.
 - Enumerate all available input-capable and output-capable Core Audio endpoints. Persist each selected endpoint by stable device UID; never bind to transient `AudioDeviceID` or display name.
 - At runtime probe stream availability, channel count, channel layout, sample rate, sample representation, buffer size and liveness. Reject unsupported or non-PCM formats with an actionable reason; never silently choose a different endpoint.
-- V1 has **two logical input lanes and two logical output lanes**, each mapped to a user-selected physical channel index of its respective device. A device may expose more than two physical channels. If fewer than two channels are exposed, allow explicitly configured duplication/mono routing where technically valid; do not fabricate channels implicitly.
-- Keep physical channel selection distinct from the logical 2×2 mixing matrix. The DSP and configuration schema should admit future N×M generalization without promising it in V1.
+- V1 uses N×2 physical input mixing, stereo AU/drift processing and L/R fan-out within one selected output device. ADR-002 supersedes the old 2×2 lane restriction. Explicit patches and actual stream/buffer topology are validated; unsupported layouts are rejected without defaults.
 - Input and output may be independently clocked, even at the same nominal sample rate. Use bounded buffering and adaptive conversion; do not assume a shared USB clock.
 - Built-in, USB, Thunderbolt and virtual devices are first-class discovery targets. Bluetooth, AirPlay, aggregate and unusual virtual devices are best-effort until validated for latency, liveness and format behavior.
 - The initial hardware validation example is a class-compliant TightAV Dante USB 2×2 feeding a Mac 3.5 mm output and ATEM Mini. This is **non-normative**; no vendor-specific branches are permitted for that example.

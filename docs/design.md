@@ -29,18 +29,17 @@ Meters must have numeric dBFS values, visible clipping flags, and an explicit in
 
 ## Settings window
 
-Tabs or sections: `Audio` (device UIDs, actual format, matrix and presets, gain, latency profile); `General` (launch at login, auto-routing, appearance); `Diagnostics` (state, device identities, sample rates, FIFO occupancy, under/overruns, resampling correction, recovery history, export); `About` (version, licences).
+Tabs or sections: `Audio` (devices, actual format, gain, effects, latency profile); `Routing` (input mix grid, presets, output patches); `General` (launch at login, auto-routing, appearance); `Diagnostics` (state, device identities, sample rates, FIFO occupancy, under/overruns, resampling correction, recovery history, Copy status/export); `About` (version, licences).
 
-### 2×2 matrix semantics
+### Routing grid (ADR-002)
 
-Let `x1`, `x2` be input channels, `yL`, `yR` output channels:
+A Routing tab shows the selected input device name above a grid: physical input rows × Mix L/Mix R columns. Each cell toggles a connection (unity when enabled); right-click exposes exact linear gain and a slider, 0–2. One input to both sides is mono duplication; multiple inputs can sum to either side. Mono and Stereo preset buttons use the first displayed physical indices only after an explicit press. For each side, `mixSide = sum(input[channel] * cellGain)`; no hidden normalization.
 
-```
-yL = m11*x1 + m21*x2
-yR = m12*x1 + m22*x2
-```
+A second grid shows selected output name with physical output rows × Out L/Out R columns. Select one side per output; multiple outputs can take the same side. Right-click explicitly selects mono L+R (clipping risk) or disconnect. Missing saved channels remain labelled with an explicit Remove patch action. Changing devices clears only that direction's patches, requires Stop and never substitutes defaults. Patches and cell gains change live with 20 ms ramps.
 
-Rows are inputs, columns are outputs. Defaults `[[1,0],[0,1]]`. Presets: Stereo `[[1,0],[0,1]]`; Swap `[[0,1],[1,0]]`; Mono input 1 `[[1,1],[0,0]]`; Mono sum `[[0.5,0.5],[0.5,0.5]]`. Show clipping risk if total contributions exceed unity; do not silently normalize custom settings. UI should expose 0.00–1.00 per cell with numeric entry for precision; advanced signed mixing deferred.
+Stereo input meters show the mixed/trimmed bus before effects; output meters show stereo after effects/drift/gain. Physical input full-scale counts and physical output summation counts are separate diagnostics. Native names and physical indices stay in the product UI; technical UIDs remain in Diagnostics/Copy status. Original 2×2 settings migrate with a backup; the matrix moves ahead of effects, requiring listening acceptance.
+
+Menu-bar waveform status: grey idle/unconfigured; green fresh healthy local callbacks/primed buffers; amber startup/rebuffering/degraded; red actionable fault. Glitch counts latch amber for the run. Colour is accompanied by popover text and an accessibility label. No signal/silence-based alarm or automatic recovery is implied. Copy status copies relevant plain-text diagnostics without audio or saved plugin state.
 
 ### Gain
 
