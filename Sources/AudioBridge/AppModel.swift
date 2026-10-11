@@ -10,6 +10,8 @@ import Darwin
 
 @MainActor
 final class AppModel: ObservableObject {
+    // Inspection is opt-in for each launch; never clutter the default interface.
+    @Published var showDebugInformation = false
     @Published private(set) var catalog = CatalogSnapshot(devices: [])
     @Published private(set) var selection = RouteSelection()
     @Published private(set) var error: String?

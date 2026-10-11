@@ -65,4 +65,6 @@ On first launch, ask user to choose input and output; do not auto-select a poten
 
 ## Accessibility and interaction
 
+Diagnostics contains a “Show debug information in the interface” toggle, disabled at each launch. Playback and Audio hide technical runtime counters, queue/timing detail and detailed delay accounting until enabled. Normal meters, status, actionable faults, buffer configuration and a compact delay estimate stay available. Diagnostics, Copy status and export retain full information independently of this display choice.
+
 All controls keyboard accessible with VoiceOver labels. Preserve menu-bar status while settings window closes. Provide a status text alternative to icon color. Show reconnect progress without blocking the UI. Do not provide a fake green success status before audio callbacks have started and health is confirmed.

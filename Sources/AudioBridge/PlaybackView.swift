@@ -18,7 +18,7 @@ struct PlaybackView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 RoutingStatusLabel(model: model).font(.headline)
-                if let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
+                if model.showDebugInformation, let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
                     Text("Delivery warning clears after 20 healthy seconds · \(Int(min(20, s.glitchCleanSeconds)))/20 s. Historical counters remain in Diagnostics.")
                         .font(.caption).foregroundStyle(.orange)
                 }
@@ -61,6 +61,7 @@ private struct DelayView: View {
                     Text(estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { "Bridge + callback buffers: ~\(number($0)) ms" }
                         ?? "Bridge + callback buffers: incomplete estimate")
                         .font(.headline)
+                    if model.showDebugInformation {
                     Text(estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "Device-reported delay: \(number($0)) ms" } ?? "Device-reported delay: Unknown / incomplete")
                     Text(estimate.totalMilliseconds.map { "Combined accounting estimate: ~\(number($0)) ms" }
                         ?? "Combined known subtotal: \(number(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms · incomplete")
@@ -103,6 +104,10 @@ private struct DelayView: View {
                     }
                     Text("Small callback buffers reduce the bridge allowance; they do not remove internal latency reported by the device/stream. The combined estimate includes those reports. Startup fill is not added again. Unknown properties stay unknown. AU wall processing time is separate. True end-to-end latency requires loopback measurement.")
                         .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Estimate only. Actual end-to-end delay requires loopback measurement.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("Start routing to observe queues and AU processing times. No measured delay is available yet.")
                         .font(.caption).foregroundStyle(.secondary)

@@ -65,8 +65,11 @@ struct BufferSettings: View {
                             if $0 >= Int(model.bufferMinimum), $0 <= Int(model.bufferMaximum) { model.setBufferFrames(UInt32($0)) }
                         }), format: .number.grouping(.never)).frame(width: 90).disabled(!model.canEditSelections)
                     }
-                    Text("\(model.selectedBufferFrames) frames").font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
+                    if model.showDebugInformation {
+                        Text("\(model.selectedBufferFrames) frames").font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
+                    }
                 }
+                if model.showDebugInformation {
                 HStack {
                     Text("\(model.bufferMinimum)–\(model.bufferMaximum) frames").font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -77,6 +80,7 @@ struct BufferSettings: View {
                 }
                 Text("Refill waits for this reserve plus one output callback and required FIR lookahead. Actual queue delay is shown in Playback.")
                     .font(.caption).foregroundStyle(.secondary)
+                }
                 DisclosureGroup("Expert", isExpanded: $expert) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -97,7 +101,7 @@ struct BufferSettings: View {
                     Label("Small bridge fill leaves little AU scheduling margin. If glitches increase, stop and try 256 or 512 frames here; device buffers are separate.", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                if model.routingRequested, let metrics = model.engineSnapshot {
+                if model.showDebugInformation, model.routingRequested, let metrics = model.engineSnapshot {
                     Text("Drift command: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm · rebuffers \(metrics.rebufferEvents) · recentered \(metrics.recenterFrames) frames")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Text("\(metrics.bufferedFrames) / \(metrics.capacity) frames · \(metrics.primed ? "Ready" : "Filling") · underrun \(metrics.underrunFrames) · overrun \(metrics.overrunFrames)")

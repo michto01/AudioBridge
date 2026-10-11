@@ -158,6 +158,9 @@ private struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
+                    Toggle("Show debug information in the interface", isOn: $model.showDebugInformation)
+                    Text("Shows live queue, drift, AU timing and detailed delay readouts in Playback and Audio. Off by default at launch; diagnostic reports always include full details.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("Build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development") · bundle: \(Bundle.main.bundlePath)")
                         .font(.caption)
                     if let metrics = model.engineSnapshot {
@@ -232,9 +235,9 @@ private struct SettingsView: View {
                 }.disabled(!model.canEditSelections)
                 if let device {
                     DeviceBufferControl(model: model, device: device).id(device.uid)
-                    Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz · buffer \(device.bufferFrames.map(String.init) ?? "unknown") frames")
+                    Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz")
                         .font(.caption)
-                    if let range = device.bufferFrameRange {
+                    if model.showDebugInformation, let range = device.bufferFrameRange {
                         Text("Supported buffer range: \(range.minimum.formatted())–\(range.maximum.formatted()) frames").font(.caption)
                     }
                 }
