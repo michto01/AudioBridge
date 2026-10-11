@@ -6,6 +6,18 @@ import XCTest
 
 /// Deferred tests: no real plugin instantiation or hardware capture.
 final class AUChainTests: XCTestCase {
+    func testCatalogCacheRoundTripIncludingEmptyCatalog() throws {
+        let empty = AUCatalogCache(effects: [], scannedAt: Date(timeIntervalSince1970: 100))
+        let restored = try JSONDecoder().decode(AUCatalogCache.self, from: JSONEncoder().encode(empty))
+        try restored.validate()
+        XCTAssertEqual(restored.effects.count, 0)
+        XCTAssertEqual(restored.scannedAt, empty.scannedAt)
+        let identity = AUIdentity(type: kAudioUnitType_Effect, subtype: kAudioUnitSubType_PeakLimiter, manufacturer: kAudioUnitManufacturer_Apple)
+        // Decode public listing data without instantiating an Audio Unit.
+        let listingData = try JSONSerialization.data(withJSONObject: ["id": ["type": identity.type, "subtype": identity.subtype, "manufacturer": identity.manufacturer], "name": "Limiter"])
+        let listing = try JSONDecoder().decode(AUListing.self, from: listingData)
+        XCTAssertThrowsError(try AUCatalogCache(effects: [listing, listing]).validate())
+    }
     func testSmallerBlocksRespectStartupFillAndRejectZero() throws {
         XCTAssertEqual(try AUBlockSizing.frames(startupFill: 16), 16)
         XCTAssertEqual(try AUBlockSizing.frames(startupFill: 32), 32)

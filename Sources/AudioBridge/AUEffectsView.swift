@@ -9,13 +9,23 @@ struct AUEffectsView: View {
                 HStack {
                     Menu("Add effect…") {
                         ForEach(model.auCatalog) { listing in Button(listing.name) { model.addAU(listing) } }
-                    }.disabled(!model.canEditAU || model.auChain.effects.count >= 8 || model.auCatalogLoading)
+                    }.disabled(!model.canEditAU || model.auChain.effects.count >= 8 || model.auCatalog.isEmpty)
                     Button(model.chainBypassed ? "Enable chain" : "Bypass chain") { model.setChainBypassed(!model.chainBypassed) }
                         .disabled(model.routingTransitioning)
-                    Button(model.auCatalogLoading ? "Scanning…" : "Rescan") { model.refreshAudioUnits() }.disabled(model.auCatalogLoading)
+                    Button("Rescan") { model.refreshAudioUnits() }.disabled(model.auCatalogLoading)
                     Spacer()
                     Text(model.chainBypassed ? "Chain bypassed" : "\(model.auChain.active.count) enabled").font(.caption).foregroundStyle(.secondary)
                 }
+                if model.auCatalogLoading {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Scanning effects in background… \(model.auScanCount) found").font(.caption)
+                    }
+                } else if let date = model.auCatalogScannedAt {
+                    Text("Cached list: \(model.auCatalog.count) effects · scanned \(date.formatted(date: .abbreviated, time: .shortened)). Rescan after installing effects.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let error = model.auScanError { Text(error).font(.caption).foregroundStyle(.orange) }
                 ForEach(Array(model.auChain.effects.enumerated()), id: \.element.id) { index, effect in
                     HStack {
                         Toggle(isOn: Binding(get: { effect.enabled }, set: { model.setAUEnabled($0, id: effect.id) })) {

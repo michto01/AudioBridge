@@ -28,6 +28,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var auChain = AUChain()
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
+    @Published private(set) var auCatalogScannedAt: Date?
+    @Published private(set) var auScanCount = 0
+    @Published private(set) var auScanError: String?
+    private let auScanQueue = DispatchQueue(label: "cz.bytelab.audiobridge.au-scan", qos: .utility)
     @Published private(set) var auEditorOpen = false
     @Published private(set) var auUpdating = false
     @Published private(set) var chainBypassed = false
@@ -63,8 +67,8 @@ final class AppModel: ObservableObject {
         if AVAudioApplication.shared.recordPermission != .granted { return "Grant microphone permission before starting." }
         if auEditorOpen { return "Save or close the AU editor before starting." }
         if !auChain.active.isEmpty {
-            if auCatalogLoading { return "Discovering installed Audio Units…" }
-            if let missing = auChain.active.first(where: { effect in !auCatalog.contains(where: { $0.id == effect.identity }) }) {
+            if auCatalogScannedAt == nil, auCatalogLoading { return "Discovering installed Audio Units…" }
+            if auCatalogScannedAt != nil, let missing = auChain.active.first(where: { effect in !auCatalog.contains(where: { $0.id == effect.identity }) }) {
                 return "Selected Audio Unit is unavailable: \(missing.name). Remove it or explicitly bypass it."
             }
         }
@@ -74,6 +78,12 @@ final class AppModel: ObservableObject {
 
     init() {
         let preferences = UserDefaults.standard
+        if let data = preferences.data(forKey: "AudioBridge.auCatalogCache"), data.count <= 8 * 1024 * 1024 {
+            do {
+                let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate()
+                auCatalog = cache.effects; auCatalogScannedAt = cache.scannedAt
+            } catch { auScanError = "Cached effect list could not be read. A background scan will replace it." }
+        }
         chainBypassed = preferences.bool(forKey: "AudioBridge.chainBypassed")
         if let saved = preferences.data(forKey: "AudioBridge.auChain") {
             do { auChain = try JSONDecoder().decode(AUChain.self, from: saved); try auChain.validate() }
@@ -95,7 +105,7 @@ final class AppModel: ObservableObject {
         observation?.watch([])
         checkPermission()
         refresh()
-        refreshAudioUnits()
+        if auCatalogScannedAt == nil { refreshAudioUnits() }
     }
     var inputIssue: String? { selection.input.issue(in: catalog.devices, direction: .input) }
     var outputIssue: String? { selection.output.issue(in: catalog.devices, direction: .output) }
@@ -257,10 +267,44 @@ final class AppModel: ObservableObject {
     }
     func refreshAudioUnits() {
         guard !auCatalogLoading else { return }
-        auCatalogLoading = true
-        probeQueue.async { [weak self] in
-            let catalog = AUCatalog.effects()
-            Task { @MainActor in self?.auCatalog = catalog; self?.auCatalogLoading = false }
+        auCatalogLoading = true; auScanCount = 0; auScanError = nil
+        let worker = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AudioBridgeAUWorker")
+        auScanQueue.async { [weak self] in
+            let result = Result { () throws -> AUCatalogCache in
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-scan-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let output = directory.appendingPathComponent("catalog.json")
+                let process = Process(); process.executableURL = worker; process.arguments = ["scan", output.path]
+                process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+                try process.run()
+                defer { if process.isRunning { process.terminate(); _ = kill(process.processIdentifier, SIGKILL) } }
+                let deadline = ProcessInfo.processInfo.systemUptime + 120
+                var previousCount = -1
+                while process.isRunning {
+                    if ProcessInfo.processInfo.systemUptime > deadline { throw AUError("Effect scan timed out; cached list retained.") }
+                    if let data = try? Data(contentsOf: directory.appendingPathComponent("progress.json")),
+                       let count = try? JSONDecoder().decode(Int.self, from: data), count != previousCount {
+                        previousCount = count
+                        Task { @MainActor in self?.auScanCount = count }
+                    }
+                    usleep(100_000)
+                }
+                guard process.terminationStatus == 0 else { throw AUError("Effect scan helper failed; cached list retained.") }
+                let data = try Data(contentsOf: output)
+                guard data.count <= 8 * 1024 * 1024 else { throw AUError("Effect catalog exceeds safety limit.") }
+                let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate(); return cache
+            }
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case .success(let cache):
+                    self.auCatalog = cache.effects; self.auCatalogScannedAt = cache.scannedAt; self.auScanCount = cache.effects.count
+                    if let data = try? JSONEncoder().encode(cache) { UserDefaults.standard.set(data, forKey: "AudioBridge.auCatalogCache") }
+                case .failure(let error): self.auScanError = error.localizedDescription
+                }
+                self.auCatalogLoading = false
+            }
         }
     }
     func updateAUChain(_ chain: AUChain) {

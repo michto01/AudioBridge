@@ -169,6 +169,25 @@ final class Renderer: @unchecked Sendable {
 enum Worker {
     @MainActor static func main() {
         let args = CommandLine.arguments
+        if args.count == 3, args[1] == "scan" {
+            let parent = getppid()
+            let watch = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            watch.schedule(deadline: .now() + 1, repeating: 1)
+            watch.setEventHandler { if getppid() != parent { exit(1) } }
+            watch.resume()
+            defer { watch.cancel() }
+            let output = URL(fileURLWithPath: args[2])
+            let effects = AUCatalog.effects { count in
+                if count == 1 || count % 10 == 0 {
+                    try? JSONEncoder().encode(count).write(to: output.deletingLastPathComponent().appendingPathComponent("progress.json"), options: .atomic)
+                }
+            }
+            do {
+                let cache = AUCatalogCache(effects: effects); try cache.validate()
+                try JSONEncoder().encode(cache).write(to: output, options: .atomic)
+                exit(0)
+            } catch { exit(1) }
+        }
         guard args.count >= 4 else { exit(2) }
         if args[1] == "edit" {
             Editor.launch(input: URL(fileURLWithPath: args[2]), output: URL(fileURLWithPath: args[3]))

@@ -35,25 +35,42 @@ public struct AUChain: Codable, Equatable, Sendable {
         }
     }
 }
-public struct AUListing: Identifiable, Sendable {
+public struct AUListing: Identifiable, Codable, Sendable {
     public let id: AUIdentity
     public let name: String
 }
+public struct AUCatalogCache: Codable, Sendable {
+    public let schemaVersion: Int
+    public let scannedAt: Date
+    public let effects: [AUListing]
+    public init(effects: [AUListing], scannedAt: Date = Date()) { schemaVersion = 1; self.scannedAt = scannedAt; self.effects = effects }
+    public func validate() throws {
+        guard schemaVersion == 1, scannedAt.timeIntervalSince1970.isFinite, effects.count <= 10000,
+              Set(effects.map(\.id)).count == effects.count,
+              effects.allSatisfy({ $0.id.type == kAudioUnitType_Effect && !$0.name.isEmpty && $0.name.count <= 1024 }) else {
+            throw AUError("Invalid cached Audio Unit catalog.")
+        }
+    }
+}
 public enum AUCatalog {
     /// Registry metadata only; instantiation/editor/render code lives in the helper.
-    public static func effects() -> [AUListing] {
+    public static func effects(progress: ((Int) -> Void)? = nil) -> [AUListing] {
         var description = AudioComponentDescription(componentType: kAudioUnitType_Effect,
             componentSubType: 0, componentManufacturer: 0, componentFlags: 0, componentFlagsMask: 0)
         var component: AudioComponent?
         var result: [AUListing] = []
+        var seen: Set<AUIdentity> = []
         while let next = AudioComponentFindNext(component, &description) {
             component = next
             var facts = AudioComponentDescription()
             guard AudioComponentGetDescription(next, &facts) == noErr else { continue }
             var name: Unmanaged<CFString>?
             guard AudioComponentCopyName(next, &name) == noErr, let name else { continue }
-            result.append(AUListing(id: AUIdentity(type: facts.componentType, subtype: facts.componentSubType,
-                manufacturer: facts.componentManufacturer), name: name.takeRetainedValue() as String))
+            let displayName = name.takeRetainedValue() as String
+            let identity = AUIdentity(type: facts.componentType, subtype: facts.componentSubType, manufacturer: facts.componentManufacturer)
+            guard seen.insert(identity).inserted else { continue }
+            result.append(AUListing(id: identity, name: displayName))
+            progress?(result.count)
         }
         return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

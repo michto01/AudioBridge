@@ -1,5 +1,8 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+let appInfoPlist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Resources/Info.plist").path
 
 let package = Package(
     name: "AudioBridge",
@@ -17,7 +20,8 @@ let package = Package(
         .target(name: "AudioBridgeEngine", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeRealtime", "AudioBridgeAU"]),
         .target(name: "AudioBridgeAUViews", cSettings: [.unsafeFlags(["-fobjc-arc"])], linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("AudioToolbox")]),
         .executableTarget(name: "AudioBridgeAUWorker", dependencies: ["AudioBridgeAU", "AudioBridgeRealtime", "AudioBridgeAUViews"]),
-        .executableTarget(name: "AudioBridge", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeEngine", "AudioBridgeAU"]),
+        .executableTarget(name: "AudioBridge", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery", "AudioBridgeEngine", "AudioBridgeAU"],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist])]),
         .executableTarget(name: "AudioBridgeProbe", dependencies: ["AudioBridgeCore", "AudioBridgeDiscovery"]),
         .testTarget(name: "AudioBridgeCoreTests", dependencies: ["AudioBridgeCore", "AudioBridgeEngine", "AudioBridgeRealtime", "AudioBridgeAU"])
     ]

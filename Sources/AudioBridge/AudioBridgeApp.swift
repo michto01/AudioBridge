@@ -1,10 +1,12 @@
 import AppKit
+import CoreServices
 import AudioBridgeCore
 import SwiftUI
 
 @main
 @MainActor
 struct AudioBridgeApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -42,6 +44,19 @@ struct AudioBridgeApp: App {
     }
     private func endpointName(_ direction: AudioDirection) -> String {
         model.device(direction)?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing")
+    }
+}
+
+@MainActor
+private final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let url = Bundle.main.url(forResource: "AudioBridge", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
+            NSApplication.shared.applicationIconImage = icon
+        }
+        let bundle = Bundle.main.bundleURL
+        if bundle.pathExtension == "app" {
+            DispatchQueue.global(qos: .utility).async { _ = LSRegisterURL(bundle as CFURL, true) }
+        }
     }
 }
 

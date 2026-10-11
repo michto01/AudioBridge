@@ -39,18 +39,26 @@ struct SignalMeters: View {
 struct BufferSettings: View {
     @ObservedObject var model: AppModel
     @State private var expert = false
+    @State private var custom = false
     var body: some View {
         GroupBox("Bridge buffer") {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Slider(value: Binding(get: {
-                        log2(Double(max(16, min(model.bufferMaximum, model.selectedBufferFrames))))
+                    let common = BufferFrameChoices.common.filter { $0 >= Int(model.bufferMinimum) && $0 <= Int(model.bufferMaximum) }
+                    Picker("Startup fill", selection: Binding(get: {
+                        custom || !common.contains(Int(model.selectedBufferFrames)) ? 0 : Int(model.selectedBufferFrames)
                     }, set: {
-                        let frames = UInt32(pow(2, $0.rounded()))
-                        model.setBufferFrames(max(model.bufferMinimum, min(model.bufferMaximum, frames)))
-                    }), in: log2(Double(min(model.bufferMinimum, model.bufferMaximum / 2)))...log2(Double(model.bufferMaximum)))
-                        .accessibilityLabel("Bridge startup buffer in frames")
-                        .disabled(!model.canEditSelections || model.bufferMinimum > 4096)
+                        custom = $0 == 0
+                        if $0 != 0 { model.setBufferFrames(UInt32($0)) }
+                    })) {
+                        ForEach(common, id: \.self) { Text("\($0) frames").tag($0) }
+                        Text("Custom…").tag(0)
+                    }.disabled(!model.canEditSelections)
+                    if custom || !common.contains(Int(model.selectedBufferFrames)) {
+                        TextField("Frames", value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
+                            if $0 >= Int(model.bufferMinimum), $0 <= Int(model.bufferMaximum) { model.setBufferFrames(UInt32($0)) }
+                        }), format: .number.grouping(.never)).frame(width: 90).disabled(!model.canEditSelections)
+                    }
                     Text("\(model.selectedBufferFrames) frames").font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
                 }
                 HStack {

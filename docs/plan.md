@@ -55,6 +55,8 @@ Follow-up: live chain insertion/removal, same-instance parameter editing, automa
 
 Bypass now selects dry output while keeping effects editable and processing; editor indication added. The fixed 256-frame floor is removed in favor of device-constrained startup fill (minimum 16) and 16–256 AU blocks. See [bypass and small-buffer results](bypass-small-buffer-results.md); low-buffer hardware acceptance remains deferred.
 
+Catalog discovery now has a persistent metadata cache, isolated first-run/manual background scans with progress, and common/custom buffer choices. Icon metadata is embedded and verified in the executable as well as the bundle. See [catalog/icon/buffer results](catalog-icon-buffer-results.md); visual microphone-list confirmation remains pending.
+
 - Build supervisor state machine with desired-vs-observed state, bounded backoff and UID-driven reconnection.
 - Implement menu-bar popover, settings window, diagnostics and configuration migration.
 - Implement login item via `SMAppService` as appropriate for app packaging and installation method.

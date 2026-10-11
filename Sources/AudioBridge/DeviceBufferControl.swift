@@ -5,6 +5,7 @@ struct DeviceBufferControl: View {
     @ObservedObject var model: AppModel
     let device: DeviceFacts
     @State private var requested = 512
+    @State private var custom = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if model.writableBuffers.contains(device.uid), let range = device.bufferFrameRange,
@@ -14,15 +15,21 @@ struct DeviceBufferControl: View {
                 if upper >= lower {
                     HStack {
                         Text("Interface buffer")
-                        if upper > lower {
-                            Slider(value: Binding(get: { Double(min(upper, max(lower, requested))) }, set: { requested = Int($0) }),
-                                   in: Double(lower)...Double(upper), step: 1)
+                        let common = BufferFrameChoices.common.filter { $0 >= lower && $0 <= upper }
+                        Picker("Size", selection: Binding(get: { custom || !common.contains(requested) ? 0 : requested }, set: {
+                            custom = $0 == 0
+                            if $0 != 0 { requested = $0 }
+                        })) {
+                            ForEach(common, id: \.self) { Text("\($0) frames").tag($0) }
+                            Text("Custom…").tag(0)
+                        }.labelsHidden()
+                        if custom || !common.contains(requested) {
+                            TextField("Frames", value: $requested, format: .number.grouping(.never)).frame(width: 75)
                         }
-                        TextField("Frames", value: $requested, format: .number.grouping(.never)).frame(width: 75)
                         Button("Apply") { model.setDeviceBuffer(uid: device.uid, frames: UInt32(requested)) }
                             .disabled(requested < lower || requested > upper)
                     }.disabled(!model.canEditSelections)
-                    Text("\(lower)–\(upper) frames · device-wide; may affect other audio apps. Stop routing to apply.")
+                    Text("\(lower)–\(upper) frames · common sizes are suggestions; driver may round or reject. Stop to apply; affects other apps using this device.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
@@ -31,6 +38,6 @@ struct DeviceBufferControl: View {
             if let message = model.deviceBufferMessage { Text(message).font(.caption) }
         }
         .onAppear { requested = Int(device.bufferFrames ?? 512) }
-        .onChange(of: device.bufferFrames) { _, frames in requested = Int(frames ?? 512) }
+        .onChange(of: device.bufferFrames) { _, frames in requested = Int(frames ?? 512); custom = !BufferFrameChoices.common.contains(requested) }
     }
 }
