@@ -118,4 +118,30 @@ final class AUChainTests: XCTestCase {
         XCTAssertEqual(ABAUTransportSnapshot(owner).renderOverBudgetBlocks, 1)
         XCTAssertEqual(ABAUTransportSnapshot(owner).workerLateWakeups, 1)
     }
+    func testPendingSourceIsConservedAcrossWorkerTransferAndDiscard() throws {
+        let name = "/abt" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(22)
+        let owner = try XCTUnwrap(ABAUTransportCreate(String(name), 1024))
+        defer { ABAUTransportClose(owner) }
+        let helper = try XCTUnwrap(ABAUTransportOpen(String(name)))
+        defer { ABAUTransportClose(helper) }
+        ABAUTransportUnlink(owner)
+        let signal = [Float](repeating: 0.25, count: 128)
+        var scratch = [Float](repeating: 0, count: 128)
+        XCTAssertEqual(signal.withUnsafeBufferPointer { ABAUCaptureWrite(owner, $0.baseAddress, 64) }, 64)
+        let start = ABAUTransportBeginBlock(helper, 64)
+        XCTAssertEqual(ABAUTransportQueues(owner).pendingFrames, 64) // Capture + in-flight must not be 128.
+        XCTAssertEqual(scratch.withUnsafeMutableBufferPointer { ABAUWorkerRead(helper, $0.baseAddress, 64) }, 64)
+        XCTAssertEqual(ABAUTransportQueues(owner).pendingFrames, 64)
+        XCTAssertEqual(scratch.withUnsafeBufferPointer { ABAUWorkerWrite(helper, $0.baseAddress, 64) }, 64)
+        XCTAssertEqual(ABAUTransportSnapshot(owner).pendingFrames, 64) // Output + in-flight still only 64.
+        ABAUTransportEndBlock(helper, start)
+        XCTAssertEqual(scratch.withUnsafeMutableBufferPointer { ABAUOutputRead(owner, $0.baseAddress, 32) }, 32)
+        XCTAssertEqual(ABAUTransportQueues(owner).pendingFrames, 32)
+        XCTAssertEqual(scratch.withUnsafeMutableBufferPointer { ABAUOutputRead(owner, $0.baseAddress, 32) }, 32)
+        XCTAssertEqual(ABAUTransportQueues(owner).pendingFrames, 0)
+        ABAUTransportReady(helper, 0.01)
+        ABAUTransportSetLatency(helper, 0.02)
+        XCTAssertEqual(ABAUTransportSnapshot(owner).latencySeconds, 0.02, accuracy: 0.00001)
+        XCTAssertTrue(ABAUTransportSnapshot(owner).ready)
+    }
 }

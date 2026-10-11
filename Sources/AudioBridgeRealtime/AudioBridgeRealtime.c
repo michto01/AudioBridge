@@ -218,6 +218,7 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
             ABLevels levels = {0};
             ABAUQueueMetrics queued = engine->au ? ABAUTransportQueues(engine->au)
                 : (ABAUQueueMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
+            if (!engine->au) queued.pendingFrames = queued.outputFrames;
             // Reserve is left AFTER rendering a callback; FIR demand includes retained history.
             engine->driftTarget = engine->prefill + frames + engine->inputBuffer * 0.5;
             double ratio = 1 + engine->drift.ppm * 0.000001;
@@ -230,11 +231,11 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
             }
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
-                // Worker starvation is scheduling pressure, not evidence of clock skew.
-                // Do not integrate its capture backlog into a faster drain command.
-                if (queued.outputFrames >= needed + engine->prefill / 2)
+                // Hold only for poor processed delivery with excess conserved backlog.
+                // A genuinely low total must still learn slower consumption.
+                if (!ABDriftShouldHold(queued.pendingFrames, engine->driftTarget, queued.outputFrames, needed, engine->prefill))
                     ratio = ABDriftStep(&engine->drift,
-                        (double)queued.inputFrames + queued.outputFrames + queued.inFlightFrames,
+                        queued.pendingFrames,
                         engine->driftTarget, engine->sampleRate, frames);
                 else atomic_fetch_add_explicit(&engine->driftHeldCallbacks, 1, memory_order_relaxed);
                 atomic_store_explicit(&engine->driftPPMBits, float_bits((float)engine->drift.ppm), memory_order_relaxed);

@@ -3,13 +3,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 typedef struct ABAUTransport ABAUTransport;
-typedef struct { uint32_t inputFrames, outputFrames, inFlightFrames; } ABAUQueueMetrics;
+typedef struct { uint32_t inputFrames, outputFrames, inFlightFrames, pendingFrames; } ABAUQueueMetrics;
 // Minimal callback snapshot; omit UI/timing counters from audio hot paths.
+// pendingFrames conserves accepted capture minus consumed/discarded source.
 ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *transport);
 bool ABAUTransportStopped(const ABAUTransport *transport);
 uint64_t ABAUTransportProcessedFrames(const ABAUTransport *transport);
 typedef struct {
-    uint32_t inputFrames, outputFrames;
+    uint32_t inputFrames, outputFrames, pendingFrames;
     uint64_t heartbeat, processedFrames;
     int32_t fault;
     bool ready, stopped, bypassed;
@@ -26,6 +27,7 @@ void ABAUTransportUnlink(ABAUTransport *transport);
 void ABAUTransportClose(ABAUTransport *transport);
 void ABAUTransportShutdown(ABAUTransport *transport);
 void ABAUTransportReady(ABAUTransport *transport, float latency);
+void ABAUTransportSetLatency(ABAUTransport *transport, float latency);
 void ABAUTransportSetBypass(ABAUTransport *transport, bool bypass);
 bool ABAUTransportBypassed(const ABAUTransport *transport);
 void ABAUTransportFault(ABAUTransport *transport, int32_t fault);

@@ -10,6 +10,24 @@ private func ringRead(_ context: UnsafeMutableRawPointer?, _ samples: UnsafeMuta
 
 /// Written for later execution; no HAL or plugin instantiation.
 final class AdaptiveDSPTests: XCTestCase {
+    func testLowProcessedQueueOnlyHoldsForExcessPendingBacklog() {
+        // Genuine shortage: controller must still learn slower consumption.
+        XCTAssertFalse(ABDriftShouldHold(32, 112, 32, 32, 64))
+        XCTAssertFalse(ABDriftShouldHold(112, 112, 32, 32, 64))
+        // Excess captured audio with poor processed delivery: worker pressure.
+        XCTAssertTrue(ABDriftShouldHold(160, 112, 32, 32, 64))
+        XCTAssertFalse(ABDriftShouldHold(160, 112, 64, 32, 64))
+        var controller = ABDriftController()
+        controller.ppm = 700
+        ABDriftReanchor(&controller, 112)
+        for _ in 0..<48000 {
+            if !ABDriftShouldHold(32, 112, 32, 32, 64) {
+                _ = ABDriftStep(&controller, 32, 112, 48000, 32)
+            }
+        }
+        XCTAssertLessThan(controller.ppm, 0)
+        XCTAssertGreaterThanOrEqual(controller.ppm, -1000)
+    }
     func testClockOffsetsConvergeWithBoundedOccupancy() {
         for offset in [-200.0, -100, -50, 50, 100, 200] {
             var controller = ABDriftController()

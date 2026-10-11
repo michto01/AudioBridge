@@ -27,7 +27,8 @@ public struct DelayEstimate: Sendable {
     }
     public init(input: DeviceFacts?, output: DeviceFacts?, selection: RouteSelection,
                 sampleRate: Double, captureQueue: UInt32, processedQueue: UInt32,
-                inFlight: UInt32, lookahead: UInt32, auLatencySeconds: Double, bypassed: Bool) {
+                inFlight: UInt32, lookahead: UInt32, auLatencySeconds: Double, bypassed: Bool,
+                pendingSourceFrames: UInt32? = nil) {
         self.sampleRate = sampleRate
         var rows: [DelayComponent] = []
         for (device, direction) in [(input, AudioDirection.input), (output, AudioDirection.output)] {
@@ -47,9 +48,14 @@ public struct DelayEstimate: Sendable {
                      DelayComponent(label: "\(prefix) safety offset", frames: facts?.safetyOffsetFrames.map(Double.init), category: .deviceReported),
                      DelayComponent(label: "\(prefix) callback buffer allowance", frames: device?.bufferFrames.map(Double.init), category: .callbackBuffer)]
         }
-        rows += [DelayComponent(label: "Capture queue", frames: Double(captureQueue), category: .bridge),
+        if let pendingSourceFrames {
+            rows.append(DelayComponent(label: "Pending source audio (queues + AU processing)", frames: Double(pendingSourceFrames), category: .bridge))
+        } else {
+            rows += [DelayComponent(label: "Capture queue", frames: Double(captureQueue), category: .bridge),
                  DelayComponent(label: "AU block in flight", frames: Double(inFlight), category: .bridge),
-                 DelayComponent(label: "Processed queue", frames: Double(processedQueue), category: .bridge),
+                 DelayComponent(label: "Processed queue", frames: Double(processedQueue), category: .bridge)]
+        }
+        rows += [
                  DelayComponent(label: "Drift FIR lookahead allowance", frames: Double(lookahead), category: .bridge),
                  DelayComponent(label: "AU reported signal latency", frames: bypassed ? 0 : (auLatencySeconds.isFinite && auLatencySeconds >= 0 && sampleRate.isFinite && sampleRate > 0 ? auLatencySeconds * sampleRate : nil), category: .bridge)]
         components = rows

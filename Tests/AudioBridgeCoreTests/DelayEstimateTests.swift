@@ -62,6 +62,14 @@ final class DelayEstimateTests: XCTestCase {
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: .init(minimum: 256, maximum: 1024)), 256)
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: .init(minimum: .nan, maximum: 1024)), 128)
     }
+    func testConservedPendingReplacesOverlappingQueueAndInFlightReports() {
+        let value = DelayEstimate(input: nil, output: nil, selection: RouteSelection(), sampleRate: 48000,
+            captureQueue: 64, processedQueue: 128, inFlight: 64, lookahead: 17,
+            auLatencySeconds: 0, bypassed: false, pendingSourceFrames: 192)
+        XCTAssertEqual(value.subtotalMilliseconds(categories: [.bridge]) ?? -1, 209.0 / 48, accuracy: 1e-8)
+        XCTAssertEqual(value.components.filter { $0.category == .bridge }.count, 3)
+        XCTAssertFalse(value.complete) // Device properties remain unknown.
+    }
     func testLatencyChangesDoNotInvalidateRoutingTopology() {
         let a = DirectionFacts(streams: [stream(1, start: 1, latency: 20)], latencyFrames: 30)
         let b = DirectionFacts(streams: [stream(1, start: 1, latency: 40)], latencyFrames: 60)

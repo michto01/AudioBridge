@@ -184,6 +184,24 @@ final class Renderer: @unchecked Sendable {
         }
         return true
     }
+    @MainActor func refreshLatency() {
+        // Read legacy and modern AU reports outside rendering, including while
+        // an editor command is pending. Some AUv2 units omit KVO notifications.
+        var total: Double = 0
+        for stage in stages {
+            let latency = stage.unit.latency
+            guard latency.isFinite, latency >= 0 else { fail(kAudioUnitErr_InvalidPropertyValue); return }
+            total += latency
+        }
+        guard total.isFinite, total < Double(Float.greatestFiniteMagnitude) else {
+            fail(kAudioUnitErr_InvalidPropertyValue); return
+        }
+        let value = Float(total)
+        if value != latencySeconds {
+            latencySeconds = value
+            ABAUTransportSetLatency(transport, value)
+        }
+    }
     func fail(_ status: OSStatus) { ABAUTransportFault(transport, status) }
     deinit {
         for stage in stages { stage.unit.deallocateRenderResources() }

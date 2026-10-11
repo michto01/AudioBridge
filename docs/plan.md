@@ -55,6 +55,8 @@ Buffer/drift repair: 0.3.6/build 15 fixes speculative end-of-callback source rea
 
 Worker-delivery follow-up: 0.3.7/build 16 uses a dedicated AU rendering thread, bounded autorelease lifetimes, minimal callback queue snapshots and separates wall-time/wake-lateness evidence from commanded/applied drift telemetry. See [results and deferred checks](worker-delivery-results.md). Real-time scheduling, measured CPU/continuity improvement and Phase 3 acceptance remain pending.
 
+Review repair: 0.3.8/build 17 brings Settings forward, keeps drift learning active for genuinely low total backlog, derives pending source occupancy from capture/consumption counters and refreshes running AU latency outside rendering. Playback accounting uses conserved pending frames. See [changes and deferred acceptance](review-fixes-results.md). Tests and live acceptance remain unrun; Phase 4 is still gated.
+
 ## Phase 4 — Supervision and UI
 
 User-authorized AU extension: installed effect catalog, persisted ordered chain, separate editor/render helper, and trim controls above meters implemented. See [AU hosting results](au-hosting-results.md). This expands the original DSP scope but does not pass Phase 3–5 gates or establish unattended readiness.

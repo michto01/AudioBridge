@@ -5,6 +5,8 @@
 typedef struct { double filtered, integral, ppm; bool initialized; } ABDriftController;
 double ABDriftStep(ABDriftController *controller, double occupancy, double target, double sampleRate, uint32_t outputFrames);
 void ABDriftReanchor(ABDriftController *controller, double target);
+// Hold only when processed delivery is low while conserved backlog is excessive.
+bool ABDriftShouldHold(double pending, double target, uint32_t processed, uint32_t needed, uint32_t reserve);
 typedef struct ABResampler ABResampler;
 typedef uint32_t (*ABReadStereo)(void *context, float *samples, uint32_t frames);
 ABResampler *ABResamplerCreate(void);

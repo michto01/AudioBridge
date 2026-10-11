@@ -602,6 +602,7 @@ final class AppModel: ObservableObject {
                 "Captured/rendered frames: \(s.inputFrames) / \(s.outputFrames); AU processed: \(s.auProcessedFrames)",
                 "Callbacks fresh input/output: \(s.inputActive) / \(s.outputActive); primed: \(s.primed)",
                 "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); queue reserve: \(s.targetFrames)",
+                "Pending source frames (accepted capture minus consumed/discarded source): \(s.pendingSourceFrames)",
                 "Underrun/overrun: \(s.underrunFrames) / \(s.overrunFrames); format faults: \(s.formatFaults)",
                 "Drift commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
                 "Drift applied (last callback): \(s.appliedDriftPPM) ppm; controller held: \(s.driftHeldCallbacks) callbacks; unity limited: \(s.driftLimitedCallbacks) callbacks; refill threshold: \(s.refillThresholdFrames) frames",

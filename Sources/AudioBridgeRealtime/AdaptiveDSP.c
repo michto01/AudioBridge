@@ -5,6 +5,9 @@
 #define TAPS 32
 #define PHASES 256
 static double clamp(double x, double lo, double hi) { return fmin(hi, fmax(lo, x)); }
+bool ABDriftShouldHold(double pending, double target, uint32_t processed, uint32_t needed, uint32_t reserve) {
+    return processed < (uint64_t)needed + reserve / 2 && pending > target;
+}
 double ABDriftStep(ABDriftController *c, double occupancy, double target, double rate, uint32_t frames) {
     if (!c || !isfinite(occupancy) || !isfinite(target) || !isfinite(rate) || rate <= 0 || target <= 0 || !frames) return 1;
     double dt = frames / rate;

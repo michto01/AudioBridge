@@ -29,7 +29,7 @@ struct AudioBridgeApp: App {
                 HStack {
                     Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
                     Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
-                    SettingsLink { Text("Settings…") }
+                    FocusSettingsButton()
                     Button("Quit") { model.quit() }
                 }
                 Button("Copy status") { model.copyStatus() }.font(.caption)
@@ -43,11 +43,55 @@ struct AudioBridgeApp: App {
         .menuBarExtraStyle(.window)
         Settings {
             SettingsView(model: model)
+                .background(SettingsWindowCapture())
         }
     }
     private func endpointName(_ direction: AudioDirection) -> String {
         model.device(direction)?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing")
     }
+}
+
+@MainActor
+private struct FocusSettingsButton: View {
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        Button("Settings…") { SettingsWindowFocus.show { openSettings() } }
+    }
+}
+
+@MainActor
+private enum SettingsWindowFocus {
+    static weak var window: NSWindow?
+    static var requested = false
+    static func show(_ open: () -> Void) {
+        requested = true
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        open()
+        bringForward()
+        // SwiftUI may create/attach its native Settings window on the next turn.
+        DispatchQueue.main.async { bringForward() }
+    }
+    static func bringForward() {
+        guard requested, let window else { return }
+        requested = false
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
+@MainActor
+private struct SettingsWindowCapture: NSViewRepresentable {
+    final class CaptureView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            SettingsWindowFocus.window = window
+            SettingsWindowFocus.bringForward()
+        }
+    }
+    func makeNSView(context: Context) -> NSView { CaptureView() }
+    func updateNSView(_ view: NSView, context: Context) {}
 }
 
 @MainActor

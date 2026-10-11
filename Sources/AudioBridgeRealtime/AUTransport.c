@@ -94,8 +94,11 @@ uint64_t ABAUTransportProcessedFrames(const ABAUTransport *t) { return atomic_lo
 void ABAUTransportSetBypass(ABAUTransport *t, bool bypass) { atomic_store_explicit(&t->shared->bypass, bypass, memory_order_release); }
 bool ABAUTransportBypassed(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->bypass, memory_order_acquire); }
 void ABAUTransportReady(ABAUTransport *t, float latency) {
-    uint32_t bits; memcpy(&bits, &latency, sizeof(bits)); atomic_store(&t->shared->latency, bits);
+    ABAUTransportSetLatency(t, latency);
     atomic_store_explicit(&t->shared->ready, true, memory_order_release);
+}
+void ABAUTransportSetLatency(ABAUTransport *t, float latency) {
+    uint32_t bits; memcpy(&bits, &latency, sizeof(bits)); atomic_store(&t->shared->latency, bits);
 }
 void ABAUTransportFault(ABAUTransport *t, int32_t fault) { atomic_store_explicit(&t->shared->fault, fault ? fault : -1, memory_order_release); }
 void ABAUTransportHeartbeat(ABAUTransport *t) { atomic_fetch_add_explicit(&t->shared->heartbeat, 1, memory_order_relaxed); }
@@ -133,11 +136,22 @@ uint32_t ABAUWorkerWrite(ABAUTransport *t, const float *s, uint32_t n) {
     atomic_fetch_add_explicit(&t->shared->processedFrames, written, memory_order_relaxed); return written;
 }
 uint32_t ABAUWorkerSpace(const ABAUTransport *t) { return t->shared->capacity - available(&t->shared->output, t->shared->capacity); }
+static uint32_t pending_frames(const Shared *s) {
+    // Same frame domain: captures accepted minus source frames consumed/discarded.
+    // AU transfer changes neither counter. Unsigned subtraction handles wrap.
+    // In the output callback, read cannot advance during this snapshot.
+    uint32_t consumed = atomic_load_explicit(&s->output.read, memory_order_acquire);
+    uint32_t captured = atomic_load_explicit(&s->input.write, memory_order_acquire);
+    uint32_t pending = captured - consumed;
+    uint32_t limit = s->capacity * 2 + 256;
+    return pending > limit ? limit : pending; // Third-party UI snapshots may span consumption.
+}
 ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *t) {
     const Shared *s = t->shared;
     return (ABAUQueueMetrics){ .inputFrames = available(&s->input, s->capacity),
         .outputFrames = available(&s->output, s->capacity),
-        .inFlightFrames = atomic_load_explicit(&s->inFlightFrames, memory_order_relaxed) };
+        .inFlightFrames = atomic_load_explicit(&s->inFlightFrames, memory_order_relaxed),
+        .pendingFrames = pending_frames(s) };
 }
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     const Shared *s = t->shared; ABAUTransportMetrics result = {0};
@@ -158,6 +172,7 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     result.workerLateWakeups = atomic_load_explicit(&s->workerLateWakeups, memory_order_relaxed);
     result.maxWorkerWakeLatenessNanoseconds = atomic_load_explicit(&s->maxWorkerWakeLatenessNanoseconds, memory_order_relaxed);
     result.inputFrames = available(&s->input, s->capacity); result.outputFrames = available(&s->output, s->capacity);
+    result.pendingFrames = pending_frames(s);
     uint32_t bits = atomic_load(&s->latency); memcpy(&result.latencySeconds, &bits, sizeof(bits)); return result;
 }
 uint64_t ABAUTransportBeginBlock(ABAUTransport *t, uint32_t frames) {

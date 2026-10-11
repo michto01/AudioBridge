@@ -70,6 +70,7 @@ final class LiveHost {
         busy = false
     }
     private func poll() {
+        renderer.refreshLatency()
         Editor.setChainBypassed(ABAUTransportBypassed(transport))
         let close = directory.appendingPathComponent("close-editor")
         if FileManager.default.fileExists(atPath: close.path) {

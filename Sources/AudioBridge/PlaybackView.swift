@@ -7,7 +7,8 @@ extension AppModel {
         return DelayEstimate(input: s.delayInputDevice, output: s.delayOutputDevice, selection: s.delaySelection,
             sampleRate: s.sampleRate, captureQueue: s.captureQueueFrames, processedQueue: s.processedQueueFrames,
             inFlight: s.auInFlightFrames, lookahead: s.resamplerLookaheadFrames,
-            auLatencySeconds: Double(s.auLatencySeconds), bypassed: s.chainBypassed)
+            auLatencySeconds: Double(s.auLatencySeconds), bypassed: s.chainBypassed,
+            pendingSourceFrames: s.pendingSourceFrames)
     }
 }
 
@@ -64,10 +65,10 @@ private struct DelayView: View {
                     Text(estimate.totalMilliseconds.map { "Combined accounting estimate: ~\(number($0)) ms" }
                         ?? "Combined known subtotal: \(number(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms · incomplete")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Capture queue \(s.captureQueueFrames) · AU in flight \(s.auInFlightFrames) · processed queue \(s.processedQueueFrames) frames")
+                    Text("Pending source audio: \(s.pendingSourceFrames) frames · capture \(s.captureQueueFrames), AU in flight \(s.auInFlightFrames), processed \(s.processedQueueFrames) (individual snapshots approximate)")
                         .font(.caption.monospacedDigit())
                     if let low = s.queueLowFrames, let high = s.queueHighFrames {
-                        Text("Queue + in-flight range: \(low)–\(high) frames / \(number(Double(low) / s.sampleRate * 1000))–\(number(Double(high) / s.sampleRate * 1000)) ms")
+                        Text("Pending source range: \(low)–\(high) frames / \(number(Double(low) / s.sampleRate * 1000))–\(number(Double(high) / s.sampleRate * 1000)) ms")
                             .font(.caption.monospacedDigit())
                     }
                     if s.auRenderBlocks > 0 {

@@ -36,6 +36,7 @@ public struct EngineSnapshot: Sendable {
     public let physicalOutputPeak: Float
     public let physicalOutputClips: UInt64
     public let captureQueueFrames: UInt32
+    public let pendingSourceFrames: UInt32
     public let processedQueueFrames: UInt32
     public let auInFlightFrames: UInt32
     public let auBlockFrames: UInt32
@@ -264,7 +265,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         let auFrames = auMetrics?.processedFrames ?? 0
         // Independently sampled queues: occupancy estimate, not a tagged-sample
         // transit measurement. Include a block removed from capture but in flight.
-        let queued = UInt64(auMetrics?.inputFrames ?? 0) + UInt64(auMetrics?.outputFrames ?? 0) + UInt64(auMetrics?.inFlightFrames ?? 0)
+        let queued = UInt64(auMetrics?.pendingFrames ?? metrics.bufferedFrames)
         if metrics.primed {
             queueLowFrames = min(queueLowFrames ?? queued, queued)
             queueHighFrames = max(queueHighFrames ?? queued, queued)
@@ -293,7 +294,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             refillThresholdFrames: metrics.refillThresholdFrames,
             recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
             physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,
-            captureQueueFrames: auMetrics?.inputFrames ?? 0, processedQueueFrames: auMetrics?.outputFrames ?? 0,
+            captureQueueFrames: auMetrics?.inputFrames ?? 0, pendingSourceFrames: auMetrics?.pendingFrames ?? metrics.bufferedFrames,
+            processedQueueFrames: auMetrics?.outputFrames ?? 0,
             auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: plan.auBlockFrames,
             resamplerLookaheadFrames: ABResamplerLookahead(), queueLowFrames: queueLowFrames, queueHighFrames: queueHighFrames,
             auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
