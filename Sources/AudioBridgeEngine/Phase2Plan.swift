@@ -46,7 +46,9 @@ public struct Phase2Plan: Sendable {
         guard prefill >= max(16, largestBuffer), prefill <= 32768 else {
             throw PlanError("Bridge buffering must be between \(max(16, largestBuffer)) and 32768 frames for these devices.")
         }
-        auBlockFrames = try AUBlockSizing.frames(startupFill: prefill)
+        // Avoid waiting for multiple small device callbacks merely because the
+        // bridge reserve is larger. Preserve the existing 16–256-frame bounds.
+        auBlockFrames = try AUBlockSizing.frames(startupFill: min(prefill, largestBuffer))
         var size: UInt32 = 1024
         while size < max(prefill * 2, largestBuffer * 4) { size *= 2 }
         capacity = size

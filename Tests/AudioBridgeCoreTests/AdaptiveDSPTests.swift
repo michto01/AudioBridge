@@ -43,6 +43,49 @@ final class AdaptiveDSPTests: XCTestCase {
         }
         XCTAssertTrue(ABResamplerStarved(resampler))
     }
+    func testExactCallbackBoundaryAndHistorySurviveEmptyRead() throws {
+        let ring = try XCTUnwrap(ABRingCreate(1024)); defer { ABRingDestroy(ring) }
+        let resampler = try XCTUnwrap(ABResamplerCreate()); defer { ABResamplerDestroy(resampler) }
+        var output = [Float](repeating: 0, count: 64)
+        func feed(_ frames: UInt32) {
+            let signal = [Float](repeating: 0.25, count: Int(frames) * 2)
+            XCTAssertEqual(signal.withUnsafeBufferPointer { ABRingWrite(ring, $0.baseAddress, frames) }, frames)
+        }
+        func render() -> UInt32 {
+            output.withUnsafeMutableBufferPointer {
+                ABResamplerProcess(resampler, ringRead, UnsafeMutableRawPointer(ring), $0.baseAddress, 32, 1)
+            }
+        }
+        XCTAssertEqual(ABResamplerInputNeeded(resampler, 32, 1), 48)
+        feed(48)
+        XCTAssertEqual(render(), 32)
+        XCTAssertFalse(ABResamplerStarved(resampler))
+        XCTAssertEqual(ABRingAvailable(ring), 0)
+        XCTAssertEqual(render(), 0)
+        XCTAssertTrue(ABResamplerStarved(resampler))
+        XCTAssertEqual(ABResamplerInputNeeded(resampler, 32, 1), 32)
+        feed(32)
+        XCTAssertEqual(render(), 32)
+        XCTAssertFalse(ABResamplerStarved(resampler))
+        for sample in output { XCTAssertEqual(sample, 0.25, accuracy: 0.00001) }
+    }
+    func testDemandMatchesConsumptionAcrossRatios() throws {
+        for ratio in [0.999, 1.0, 1.001] {
+            let ring = try XCTUnwrap(ABRingCreate(1024)); defer { ABRingDestroy(ring) }
+            let resampler = try XCTUnwrap(ABResamplerCreate()); defer { ABResamplerDestroy(resampler) }
+            var output = [Float](repeating: 0, count: 64)
+            for _ in 0..<128 {
+                let needed = ABResamplerInputNeeded(resampler, 32, ratio)
+                let signal = [Float](repeating: 0.25, count: Int(needed) * 2)
+                XCTAssertEqual(signal.withUnsafeBufferPointer { ABRingWrite(ring, $0.baseAddress, needed) }, needed)
+                XCTAssertEqual(output.withUnsafeMutableBufferPointer {
+                    ABResamplerProcess(resampler, ringRead, UnsafeMutableRawPointer(ring), $0.baseAddress, 32, ratio)
+                }, 32)
+                XCTAssertFalse(ABResamplerStarved(resampler))
+                XCTAssertEqual(ABRingAvailable(ring), 0)
+            }
+        }
+    }
     func testMatrixPresetsAndValidation() {
         let stereo = ChannelMatrix.identity.process(left: 0.2, right: 0.8)
         XCTAssertEqual(stereo.0, 0.2); XCTAssertEqual(stereo.1, 0.8)

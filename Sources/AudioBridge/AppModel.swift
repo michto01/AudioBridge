@@ -601,7 +601,7 @@ final class AppModel: ObservableObject {
             lines += ["Input/output callbacks: \(s.inputCallbacks) / \(s.outputCallbacks)",
                 "Captured/rendered frames: \(s.inputFrames) / \(s.outputFrames); AU processed: \(s.auProcessedFrames)",
                 "Callbacks fresh input/output: \(s.inputActive) / \(s.outputActive); primed: \(s.primed)",
-                "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); startup fill: \(s.targetFrames)",
+                "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); queue reserve: \(s.targetFrames)",
                 "Underrun/overrun: \(s.underrunFrames) / \(s.overrunFrames); format faults: \(s.formatFaults)",
                 "Drift commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
                 "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]

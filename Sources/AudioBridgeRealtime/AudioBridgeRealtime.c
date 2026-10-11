@@ -214,21 +214,42 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
         uint32_t frames;
         if (ABRoutingFrames(engine->routing, output, false, &frames) && frames <= engine->scratchFrames) {
             ABLevels levels = {0};
+            ABAUTransportMetrics queued = engine->au ? ABAUTransportSnapshot(engine->au)
+                : (ABAUTransportMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
+            // Reserve is left AFTER rendering a callback; FIR demand includes retained history.
+            engine->driftTarget = engine->prefill + frames + engine->inputBuffer * 0.5;
+            double ratio = 1 + engine->drift.ppm * 0.000001;
+            uint32_t needed = ABResamplerInputNeeded(engine->resampler, frames, ratio);
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
-                && (engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring)) >= engine->prefill + ABResamplerLookahead())
+                && queued.outputFrames >= engine->prefill + needed) {
+                ABDriftReanchor(&engine->drift, engine->driftTarget);
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
+            }
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
-                ABAUTransportMetrics queued = engine->au ? ABAUTransportSnapshot(engine->au) : (ABAUTransportMetrics){ .outputFrames = ABRingAvailable(engine->ring) };
-                // Clock balance includes both sides of the asynchronous AU worker.
-                double ratio = ABDriftStep(&engine->drift, (double)queued.inputFrames + queued.outputFrames,
-                    engine->driftTarget, engine->sampleRate, frames);
+                // Worker starvation is scheduling pressure, not evidence of clock skew.
+                // Do not integrate its capture backlog into a faster drain command.
+                if (queued.outputFrames >= needed + engine->prefill / 2)
+                    ratio = ABDriftStep(&engine->drift,
+                        (double)queued.inputFrames + queued.outputFrames + queued.inFlightFrames,
+                        engine->driftTarget, engine->sampleRate, frames);
                 atomic_store_explicit(&engine->driftPPMBits, float_bits((float)engine->drift.ppm), memory_order_relaxed);
                 if (queued.outputFrames > engine->scratchFrames * 9 / 10) {
-                    uint32_t discard = queued.outputFrames - engine->prefill - ABResamplerLookahead();
-                    uint32_t removed = source_read(engine, engine->outputScratch, discard);
-                    atomic_fetch_add_explicit(&engine->recenterFrames, removed, memory_order_relaxed);
-                    ABResamplerReset(engine->resampler);
+                    uint32_t keep = engine->prefill + frames + ABResamplerLookahead();
+                    if (queued.outputFrames > keep) {
+                        uint32_t discard = queued.outputFrames - keep;
+                        if (discard > engine->scratchFrames) discard = engine->scratchFrames;
+                        uint32_t removed = source_read(engine, engine->outputScratch, discard);
+                        queued.outputFrames -= removed;
+                        atomic_fetch_add_explicit(&engine->recenterFrames, removed, memory_order_relaxed);
+                        ABResamplerReset(engine->resampler);
+                        ABDriftReanchor(&engine->drift, engine->driftTarget);
+                    }
                 }
+                // A positive correction can need one extra source frame. Prefer a complete
+                // unity callback to avoidable starvation; retain the bounded PI command.
+                if (ratio > 1 && ABResamplerInputNeeded(engine->resampler, frames, ratio) > queued.outputFrames
+                    && ABResamplerInputNeeded(engine->resampler, frames, 1) <= queued.outputFrames)
+                    ratio = 1;
                 uint32_t read = ABResamplerProcess(engine->resampler, source_read, engine, engine->outputScratch, frames, ratio);
                 apply_gain(engine->outputScratch, frames, &engine->outputGain,
                     bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
@@ -243,7 +264,7 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 if (read < frames || ABResamplerStarved(engine->resampler)) {
                     atomic_store_explicit(&engine->primed, false, memory_order_release);
                     atomic_fetch_add_explicit(&engine->rebufferEvents, 1, memory_order_relaxed);
-                    engine->drift.filtered = engine->driftTarget;
+                    ABDriftReanchor(&engine->drift, engine->driftTarget);
                 }
             } else if (atomic_load_explicit(&engine->rebufferEvents, memory_order_relaxed) > 0) {
                 atomic_fetch_add_explicit(&engine->underrunFrames, frames, memory_order_relaxed);

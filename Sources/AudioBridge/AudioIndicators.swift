@@ -51,7 +51,7 @@ struct BufferSettings: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     let common = BufferFrameChoices.common.filter { $0 >= Int(model.bufferMinimum) && $0 <= Int(model.bufferMaximum) }
-                    Picker("Startup fill", selection: Binding(get: {
+                    Picker("Queue reserve", selection: Binding(get: {
                         custom || !common.contains(Int(model.selectedBufferFrames)) ? 0 : Int(model.selectedBufferFrames)
                     }, set: {
                         custom = $0 == 0
@@ -71,10 +71,12 @@ struct BufferSettings: View {
                     Text("\(model.bufferMinimum)–\(model.bufferMaximum) frames").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     if let rate = model.routePlan?.sampleRate {
-                        Text("\((Double(model.selectedBufferFrames) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms startup fill")
+                        Text("\((Double(model.selectedBufferFrames) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms queue reserve")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Text("Refill waits for this reserve plus one output callback and required FIR lookahead. Actual queue delay is shown in Playback.")
+                    .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Expert", isExpanded: $expert) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
