@@ -133,6 +133,7 @@ private struct EffectEditor: View {
     let save: () -> Void
     @State private var native: NSViewController?
     @State private var requested = false
+    @State private var nativeResolved = false
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -152,7 +153,10 @@ private struct EffectEditor: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else if let native { NativeEditor(controller: native).frame(minWidth: 400, minHeight: 300).frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else {
+            else if !nativeResolved {
+                ProgressView("Loading native editor…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         if let presets = unit.factoryPresets, !presets.isEmpty {
@@ -177,6 +181,7 @@ private struct EffectEditor: View {
             unit.requestViewController { controller in
                 Task { @MainActor in
                     native = controller
+                    nativeResolved = true
                     if let controller {
                         let preferred = controller.preferredContentSize
                         if preferred.width > 0, preferred.height > 0,
@@ -211,7 +216,10 @@ private struct ParameterControl: View {
                 }), in: Double(parameter.minValue)...Double(parameter.maxValue))
                     .disabled(!parameter.flags.contains(.flag_IsWritable))
             }
-            Text(parameter.string(fromValue: nil)).font(.caption).frame(width: 100, alignment: .trailing)
+            // Some AUv2 formatters crash on a null value pointer (observed TDR Nova).
+            // Numeric host formatting also avoids running plugin formatting during SwiftUI layout.
+            Text(value.formatted(.number.precision(.fractionLength(3))))
+                .font(.caption.monospacedDigit()).frame(width: 100, alignment: .trailing)
         }
         .onAppear { value = parameter.value }
         .onReceive(Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()) { _ in value = parameter.value }
