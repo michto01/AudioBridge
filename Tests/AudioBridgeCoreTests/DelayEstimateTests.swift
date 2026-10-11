@@ -40,6 +40,20 @@ final class DelayEstimateTests: XCTestCase {
         XCTAssertNil(estimate(rate: 0).milliseconds(10))
         XCTAssertNil(estimate(rate: .nan).milliseconds(10))
     }
+    func testReportedScreenshotSeparatesSmallBridgeBuffersFromStreamLatency() {
+        let input = DeviceFacts(runtimeID: 1, uid: "i", name: "Input", bufferFrames: 32,
+            input: DirectionFacts(streams: [stream(1, start: 1, latency: 1439)], latencyFrames: 0, safetyOffsetFrames: 74))
+        let output = DeviceFacts(runtimeID: 2, uid: "o", name: "Output", bufferFrames: 32,
+            output: DirectionFacts(streams: [stream(2, start: 1, latency: 690)], latencyFrames: 70, safetyOffsetFrames: 74))
+        var selection = RouteSelection()
+        selection.inputMix = [InputPatch(channel: 1, left: 1, right: 1)]
+        selection.outputMap = [OutputPatch(channel: 1, source: .left), OutputPatch(channel: 2, source: .right)]
+        let value = DelayEstimate(input: input, output: output, selection: selection, sampleRate: 48000,
+            captureQueue: 32, processedQueue: 105, inFlight: 0, lookahead: 17, auLatencySeconds: 0, bypassed: false)
+        XCTAssertEqual(value.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]) ?? -1, 218.0 / 48, accuracy: 1e-8)
+        XCTAssertEqual(value.subtotalMilliseconds(categories: [.deviceReported]) ?? -1, 2347.0 / 48, accuracy: 1e-8)
+        XCTAssertEqual(value.totalMilliseconds ?? -1, 2565.0 / 48, accuracy: 1e-8)
+    }
     func testBufferDraftPrefersRealDriverValueAndOtherwise128() {
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: 64, range: nil), 64)
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: 96, range: nil), 96)

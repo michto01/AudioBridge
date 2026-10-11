@@ -120,9 +120,8 @@ final class AppModel: ObservableObject {
             guard let snapshot = engineSnapshot, snapshot.primed,
                   snapshot.inputCallbacks > 0, snapshot.outputCallbacks > 0,
                   snapshot.outputFrames > 0 else { return "Starting — waiting for callbacks" }
-            if RoutingActivity.hasGlitches(underrunFrames: snapshot.underrunFrames,
-                overrunFrames: snapshot.overrunFrames, formatFaults: snapshot.formatFaults) || snapshot.bufferedFrames == 0 {
-                return "Experimental routing — buffer glitches"
+            if snapshot.recentGlitches {
+                return "Experimental routing — recent buffer glitches"
             }
             if !snapshot.inputActive || !snapshot.outputActive { return "Experimental routing — callback gap" }
             return "Experimental routing active"
@@ -608,6 +607,10 @@ final class AppModel: ObservableObject {
                 "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
         } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }
         if let s = engineSnapshot, let estimate = delayEstimate {
+            lines.append("Recent glitches: \(s.recentGlitches); continuously healthy: \(s.glitchCleanSeconds) / 20 seconds; counters remain cumulative")
+            let bridge = estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map(String.init(describing:)) ?? "unknown"
+            let hardware = estimate.subtotalMilliseconds(categories: [.deviceReported]).map(String.init(describing:)) ?? "unknown"
+            lines.append("Delay bridge + callback buffers: \(bridge) ms; device-reported: \(hardware) ms")
             lines.append("Delay model: \(routingRequested ? "live" : "last run"); \(s.primed ? "primed" : "startup"); estimated allowances, not measured end-to-end")
             for row in estimate.components {
                 let value = row.frames.map { "\($0) frames / \(estimate.milliseconds($0) ?? 0) ms" } ?? "unknown"

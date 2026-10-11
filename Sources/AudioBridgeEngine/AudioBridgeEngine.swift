@@ -46,6 +46,8 @@ public struct EngineSnapshot: Sendable {
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
     public let chainBypassed: Bool
+    public let recentGlitches: Bool
+    public let glitchCleanSeconds: Double
 }
 
 public struct MeterLevel: Sendable {
@@ -79,6 +81,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private var activeSelection = RouteSelection()
     private var delayInputDevice: DeviceFacts?
     private var delayOutputDevice: DeviceFacts?
+    private var recentGlitches = RecentGlitches()
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
@@ -116,6 +119,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 }
                 startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
                 queueLowFrames = nil; queueHighFrames = nil
+                recentGlitches = RecentGlitches()
                 lastInputActivity = nil; lastOutputActivity = nil; lastDeviceCheck = .distantPast
                 let timer = DispatchSource.makeTimerSource(queue: queue)
                 watchdog = timer
@@ -257,6 +261,10 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             queueHighFrames = max(queueHighFrames ?? queued, queued)
         }
         let auResponse = auHost?.response
+        recentGlitches.update(now: ProcessInfo.processInfo.systemUptime,
+            healthy: fault == nil && metrics.primed && inputActive && outputActive && metrics.outputFrames > 0,
+            counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
+                formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)" }
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
@@ -279,7 +287,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
             auLastRenderNanoseconds: auMetrics?.lastRenderNanoseconds ?? 0, auMaxRenderNanoseconds: auMetrics?.maxRenderNanoseconds ?? 0,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
-            chainBypassed: auMetrics?.bypassed ?? false)
+            chainBypassed: auMetrics?.bypassed ?? false,
+            recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {

@@ -17,6 +17,10 @@ struct PlaybackView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 RoutingStatusLabel(model: model).font(.headline)
+                if let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
+                    Text("Delivery warning clears after 20 healthy seconds · \(Int(min(20, s.glitchCleanSeconds)))/20 s. Historical counters remain in Diagnostics.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 HStack {
                     Button { model.startRouting() } label: { Label("Start", systemImage: "play.fill") }
                         .disabled(!model.canStartRouting)
@@ -53,9 +57,13 @@ private struct DelayView: View {
                 if let s = model.engineSnapshot, let estimate = model.delayEstimate {
                     Text(model.routingRequested ? (s.primed ? "Live estimate" : "Startup — estimate not steady") : "Last run snapshot")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text(estimate.totalMilliseconds.map { "Estimated chain allowance: \(number($0)) ms" }
-                        ?? "Known subtotal: \(number(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms · incomplete")
+                    Text(estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { "Bridge + callback buffers: ~\(number($0)) ms" }
+                        ?? "Bridge + callback buffers: incomplete estimate")
                         .font(.headline)
+                    Text(estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "Device-reported delay: \(number($0)) ms" } ?? "Device-reported delay: Unknown / incomplete")
+                    Text(estimate.totalMilliseconds.map { "Combined accounting estimate: ~\(number($0)) ms" }
+                        ?? "Combined known subtotal: \(number(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms · incomplete")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("Capture queue \(s.captureQueueFrames) · AU in flight \(s.auInFlightFrames) · processed queue \(s.processedQueueFrames) frames")
                         .font(.caption.monospacedDigit())
                     if let low = s.queueLowFrames, let high = s.queueHighFrames {
@@ -80,7 +88,7 @@ private struct DelayView: View {
                             }
                         }.padding(.top, 4)
                     }
-                    Text("Estimate adds driver reports, callback buffer allowances, observed queues/in-flight block, FIR lookahead and AU signal latency. Startup fill is not added again. Unknown properties stay unknown. Block wall time includes scheduling/preemption and is not added to signal delay. This is not a measured end-to-end latency; that requires loopback.")
+                    Text("Small callback buffers reduce the bridge allowance; they do not remove internal latency reported by the device/stream. The combined estimate includes those reports. Startup fill is not added again. Unknown properties stay unknown. AU wall processing time is separate. True end-to-end latency requires loopback measurement.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text("Start routing to observe queues and AU processing times. No measured delay is available yet.")

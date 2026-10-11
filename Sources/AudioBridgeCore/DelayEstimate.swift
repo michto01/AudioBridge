@@ -1,9 +1,11 @@
 import Foundation
 
+public enum DelayCategory: Equatable, Sendable { case deviceReported, callbackBuffer, bridge }
 public struct DelayComponent: Sendable, Identifiable {
     public var id: String { label }
     public let label: String
     public let frames: Double?
+    public let category: DelayCategory
 }
 
 /// Accounting model only. Drivers and plugins report latency; physical transit
@@ -14,6 +16,11 @@ public struct DelayEstimate: Sendable {
     public var knownFrames: Double { components.compactMap(\.frames).reduce(0, +) }
     public var complete: Bool { components.allSatisfy { $0.frames != nil } }
     public var totalMilliseconds: Double? { complete ? milliseconds(knownFrames) : nil }
+    public func subtotalMilliseconds(categories: [DelayCategory]) -> Double? {
+        let selected = components.filter { categories.contains($0.category) }
+        guard selected.allSatisfy({ $0.frames != nil }) else { return nil }
+        return milliseconds(selected.compactMap(\.frames).reduce(0, +))
+    }
     public func milliseconds(_ frames: Double) -> Double? {
         guard sampleRate.isFinite, sampleRate > 0, frames.isFinite, frames >= 0 else { return nil }
         return frames / sampleRate * 1000
@@ -35,16 +42,16 @@ public struct DelayEstimate: Sendable {
             let streamLatency = !streams.isEmpty && streams.allSatisfy { $0.latencyFrames != nil }
                 ? streams.compactMap(\.latencyFrames).max().map(Double.init) : nil
             let prefix = direction.rawValue.capitalized
-            rows += [DelayComponent(label: "\(prefix) device latency", frames: facts?.latencyFrames.map(Double.init)),
-                     DelayComponent(label: "\(prefix) routed stream latency (maximum)", frames: streamLatency),
-                     DelayComponent(label: "\(prefix) safety offset", frames: facts?.safetyOffsetFrames.map(Double.init)),
-                     DelayComponent(label: "\(prefix) callback buffer allowance", frames: device?.bufferFrames.map(Double.init))]
+            rows += [DelayComponent(label: "\(prefix) device latency", frames: facts?.latencyFrames.map(Double.init), category: .deviceReported),
+                     DelayComponent(label: "\(prefix) routed stream latency (maximum)", frames: streamLatency, category: .deviceReported),
+                     DelayComponent(label: "\(prefix) safety offset", frames: facts?.safetyOffsetFrames.map(Double.init), category: .deviceReported),
+                     DelayComponent(label: "\(prefix) callback buffer allowance", frames: device?.bufferFrames.map(Double.init), category: .callbackBuffer)]
         }
-        rows += [DelayComponent(label: "Capture queue", frames: Double(captureQueue)),
-                 DelayComponent(label: "AU block in flight", frames: Double(inFlight)),
-                 DelayComponent(label: "Processed queue", frames: Double(processedQueue)),
-                 DelayComponent(label: "Drift FIR lookahead allowance", frames: Double(lookahead)),
-                 DelayComponent(label: "AU reported signal latency", frames: bypassed ? 0 : (auLatencySeconds.isFinite && auLatencySeconds >= 0 && sampleRate.isFinite && sampleRate > 0 ? auLatencySeconds * sampleRate : nil))]
+        rows += [DelayComponent(label: "Capture queue", frames: Double(captureQueue), category: .bridge),
+                 DelayComponent(label: "AU block in flight", frames: Double(inFlight), category: .bridge),
+                 DelayComponent(label: "Processed queue", frames: Double(processedQueue), category: .bridge),
+                 DelayComponent(label: "Drift FIR lookahead allowance", frames: Double(lookahead), category: .bridge),
+                 DelayComponent(label: "AU reported signal latency", frames: bypassed ? 0 : (auLatencySeconds.isFinite && auLatencySeconds >= 0 && sampleRate.isFinite && sampleRate > 0 ? auLatencySeconds * sampleRate : nil), category: .bridge)]
         components = rows
     }
 }
