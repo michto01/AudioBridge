@@ -112,4 +112,16 @@ final class StereoRoutingTests: XCTestCase {
         XCTAssertEqual(state(glitches: true), .degraded)
         XCTAssertEqual(state(fault: true), .actionRequired)
     }
+    func testClipIsSignalLevelAndOnlyDeliveryFaultsAreGlitches() {
+        let clipped = MeterLevel(amplitude: 1.2, clippedSamples: 500)
+        XCTAssertGreaterThan(clipped.clippedSamples, 0)
+        let glitches = RoutingActivity.hasGlitches(underrunFrames: 0, overrunFrames: 0, formatFaults: 0)
+        XCTAssertFalse(glitches)
+        XCTAssertEqual(RoutingActivity.resolve(fault: false, requested: true, transitioning: false,
+            configured: true, configurationFault: false, primed: true, callbacksFresh: true,
+            deliveredFrames: true, buffered: true, glitches: glitches), .running)
+        XCTAssertTrue(RoutingActivity.hasGlitches(underrunFrames: 1, overrunFrames: 0, formatFaults: 0))
+        XCTAssertTrue(RoutingActivity.hasGlitches(underrunFrames: 0, overrunFrames: 1, formatFaults: 0))
+        XCTAssertTrue(RoutingActivity.hasGlitches(underrunFrames: 0, overrunFrames: 0, formatFaults: 1))
+    }
 }

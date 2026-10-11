@@ -199,7 +199,7 @@ private struct SettingsView: View {
                 GainControl(model: model, direction: direction)
                 SignalMeters(model: model, direction: direction)
                 if direction == .input, let raw = model.engineSnapshot?.rawInputClips, raw.contains(where: { $0 > 0 }) {
-                    Text("Input reached full scale before trim. Digital attenuation cannot repair capture clipping.")
+                    Text("Capture reached full scale during this run (signal level, not a routing fault).")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if let device {

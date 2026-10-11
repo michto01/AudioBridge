@@ -6,9 +6,20 @@ import AVFAudio
 import CoreAudioKit
 import Foundation
 
-func instantiate(_ effect: AUEffect) async throws -> AUAudioUnit {
-    try await withCheckedThrowingContinuation { continuation in
-        AUAudioUnit.instantiate(with: effect.identity.description, options: []) { unit, error in
+@MainActor
+func instantiateWrapper(_ effect: AUEffect) async throws -> AVAudioUnit {
+    var description = effect.identity.description
+    guard let component = AudioComponentFindNext(nil, &description),
+          AudioComponentGetDescription(component, &description) == noErr else {
+        throw AUError("Unable to find \(effect.name).")
+    }
+    // Some legacy plugins initialize UI timers/message infrastructure during
+    // processor creation. Use AppKit's thread for synchronous AUv2 creation.
+    if description.componentFlags & AudioComponentFlags.requiresAsyncInstantiation.rawValue == 0 {
+        return AVAudioUnitEffect(audioComponentDescription: description)
+    }
+    return try await withCheckedThrowingContinuation { continuation in
+        AVAudioUnit.instantiate(with: description, options: []) { unit, error in
             if let unit { continuation.resume(returning: unit) }
             else { continuation.resume(throwing: error ?? AUError("Unable to load \(effect.name).")) }
         }
@@ -78,7 +89,7 @@ final class Renderer: @unchecked Sendable {
         second = .allocate(capacity: count); second.initialize(repeating: 0, count: count)
         list = AudioBufferList.allocate(maximumBuffers: 2); list.unsafeMutablePointer.pointee.mNumberBuffers = 2
     }
-    func prepare(request: AUWorkerRequest) async throws {
+    @MainActor func prepare(request: AUWorkerRequest) async throws {
         guard request.sampleRate.isFinite, request.sampleRate > 0, frames >= 16, frames <= 256,
               frames & (frames - 1) == 0,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: request.sampleRate, channels: 2, interleaved: false) else {
@@ -87,12 +98,7 @@ final class Renderer: @unchecked Sendable {
         idleMicroseconds = UInt32(min(1000, max(50, Double(frames) / request.sampleRate * 250_000)))
         var latency: Double = 0
         for effect in request.chain.active {
-            let wrapper: AVAudioUnit = try await withCheckedThrowingContinuation { continuation in
-                AVAudioUnit.instantiate(with: effect.identity.description, options: []) { unit, error in
-                    if let unit { continuation.resume(returning: unit) }
-                    else { continuation.resume(throwing: error ?? AUError("Unable to load \(effect.name).")) }
-                }
-            }
+            let wrapper = try await instantiateWrapper(effect)
             let unit = wrapper.auAudioUnit
             try restore(effect, unit: unit)
             guard unit.inputBusses.count >= 1, unit.outputBusses.count >= 1 else {

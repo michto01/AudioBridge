@@ -47,7 +47,10 @@ final class Editor: NSObject, NSWindowDelegate {
         retained = editor; editor.open()
     }
     static func closeLive() { if retained?.liveCompletion != nil { retained?.save() } }
-    static func setChainBypassed(_ bypassed: Bool) { retained?.bypassStatus.bypassed = bypassed }
+    static func setChainBypassed(_ bypassed: Bool) {
+        guard let retained, retained.bypassStatus.bypassed != bypassed else { return }
+        retained.bypassStatus.bypassed = bypassed
+    }
     private func open() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -61,12 +64,7 @@ final class Editor: NSObject, NSWindowDelegate {
         }
         Task { [self] in
             do {
-                let wrapper: AVAudioUnit = try await withCheckedThrowingContinuation { continuation in
-                    AVAudioUnit.instantiate(with: effect.identity.description, options: []) { unit, error in
-                        if let unit { continuation.resume(returning: unit) }
-                        else { continuation.resume(throwing: error ?? AUError("Unable to load effect editor.")) }
-                    }
-                }
+                let wrapper = try await instantiateWrapper(effect)
                 self.wrapper = wrapper
                 let unit = wrapper.auAudioUnit; try restore(effect, unit: unit)
                 self.unit = unit; loadTimer?.invalidate(); loadTimer = nil

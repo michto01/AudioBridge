@@ -120,8 +120,8 @@ final class AppModel: ObservableObject {
             guard let snapshot = engineSnapshot, snapshot.primed,
                   snapshot.inputCallbacks > 0, snapshot.outputCallbacks > 0,
                   snapshot.outputFrames > 0 else { return "Starting — waiting for callbacks" }
-            if snapshot.underrunFrames > 0 || snapshot.overrunFrames > 0
-                || snapshot.bufferedFrames == 0 || snapshot.formatFaults > 0 {
+            if RoutingActivity.hasGlitches(underrunFrames: snapshot.underrunFrames,
+                overrunFrames: snapshot.overrunFrames, formatFaults: snapshot.formatFaults) || snapshot.bufferedFrames == 0 {
                 return "Experimental routing — buffer glitches"
             }
             if !snapshot.inputActive || !snapshot.outputActive { return "Experimental routing — callback gap" }

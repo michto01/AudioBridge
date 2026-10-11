@@ -45,9 +45,11 @@ final class LiveHost {
         Self.retained = self
         driver.setBypass(request.bypass == true)
         ABAUTransportReady(transport, renderer.latencySeconds)
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
         let driver = driver
         DispatchQueue.global(qos: .userInteractive).async { driver.run(); exit(0) }
     }
@@ -62,10 +64,15 @@ final class LiveHost {
         if FileManager.default.fileExists(atPath: close.path) {
             try? FileManager.default.removeItem(at: close); Editor.closeLive()
         }
-        guard !busy, let data = try? Data(contentsOf: directory.appendingPathComponent("command.json")),
+        let commandURL = directory.appendingPathComponent("command.json")
+        guard !busy, let data = try? Data(contentsOf: commandURL),
               data.count <= 96 * 1024 * 1024,
               let command = try? JSONDecoder().decode(AULiveCommand.self, from: data), command.id != lastCommand else { return }
         lastCommand = command.id; busy = true
+        // Parent waits for the reply before writing the next command. Consume
+        // once instead of decoding potentially large saved states at 10 Hz.
+        do { try FileManager.default.removeItem(at: commandURL) }
+        catch { reply(AULiveResponse(id: command.id, error: "Unable to consume AU command.")); return }
         if let bypass = command.bypass {
             driver.setBypass(bypass); reply(AULiveResponse(id: command.id)); return
         }

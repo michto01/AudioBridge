@@ -5,6 +5,7 @@ import SwiftUI
 struct SignalMeters: View {
     @ObservedObject var model: AppModel
     let direction: AudioDirection
+    @State private var clipUntil = [Date.distantPast, Date.distantPast]
     var body: some View {
         let snapshot = model.engineSnapshot
         let fresh = model.routingRequested && snapshot?.fault == nil
@@ -26,13 +27,18 @@ struct SignalMeters: View {
                     }.frame(height: 8)
                     Text(fresh ? (db.isFinite ? String(format: "%.1f dBFS", db) : "−∞ dBFS") : "Inactive")
                         .font(.caption.monospacedDigit()).frame(width: 85, alignment: .trailing)
-                    Text((level?.clippedSamples ?? 0) > 0 ? "CLIP" : "")
+                    Text(fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date()) ? "CLIP" : "")
                         .font(.caption.bold()).foregroundStyle(.red).frame(width: 32)
                 }
                 .accessibilityElement(children: .combine)
             }
         }
-        .help("Latest audio-buffer peaks sampled 20 times per second. CLIP means a sample reached full scale during this run. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
+        .onChange(of: levels?.map(\.clippedSamples)) { old, new in
+            for lane in 0..<2 where (new?[lane] ?? 0) > (old?[lane] ?? 0) {
+                clipUntil[lane] = Date().addingTimeInterval(1)
+            }
+        }
+        .help("Latest audio-buffer peaks sampled 20 times per second. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
     }
 }
 

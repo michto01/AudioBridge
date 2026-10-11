@@ -11,7 +11,8 @@ extension AppModel {
             configurationFault: inputIssue != nil || outputIssue != nil || permission != "Granted" || routeReadiness != nil,
             primed: s?.primed == true, callbacksFresh: s?.inputActive == true && s?.outputActive == true,
             deliveredFrames: (s?.outputFrames ?? 0) > 0, buffered: (s?.bufferedFrames ?? 0) > 0,
-            glitches: (s?.underrunFrames ?? 0) > 0 || (s?.overrunFrames ?? 0) > 0 || (s?.formatFaults ?? 0) > 0)
+            glitches: RoutingActivity.hasGlitches(underrunFrames: s?.underrunFrames ?? 0,
+                overrunFrames: s?.overrunFrames ?? 0, formatFaults: s?.formatFaults ?? 0))
     }
 }
 
