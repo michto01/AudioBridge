@@ -9,6 +9,8 @@
 
 ## Deterministic DSP tests
 
+Installed AU follow-up: `AUChainTests.swift` has serialization/validation and shared-queue test source only; execution is deferred. Real plugin rendering, editor persistence, crash/hang isolation and cross-process throughput require later acceptance checks. See [AU results](au-hosting-results.md).
+
 - Identity matrix preserves each channel with numerical tolerance.
 - Swap routes L/R correctly; mono sum uses 0.5+0.5; mono input 1 duplicates only first channel.
 - Full-scale simultaneous summation shows expected clipping risk, not hidden normalization.

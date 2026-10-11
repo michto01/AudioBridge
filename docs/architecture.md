@@ -1,5 +1,9 @@
 # Architecture
 
+## User-authorized Audio Unit extension
+
+Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. Input trim precedes the chain; output gain follows it. The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed or stalled helpers stop routing; automatic recovery and drift compensation are still pending. See [implementation evidence and limits](au-hosting-results.md).
+
 ## Logical components
 
 ```

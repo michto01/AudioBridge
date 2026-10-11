@@ -3,6 +3,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "AUTransport.h"
 
 typedef struct ABRing ABRing;
 ABRing *ABRingCreate(uint32_t capacity);
@@ -48,6 +49,8 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output,
                          ABLayout inputLayout, ABLayout outputLayout,
                          uint32_t capacity, uint32_t prefill);
 OSStatus ABEngineStart(ABEngine *engine);
+// Borrowed mapping stays alive until callback teardown succeeds.
+bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport);
 // Initial gain is configured only before callback registration; live updates are atomic.
 void ABEngineInitialGains(ABEngine *engine, float input, float output, uint32_t rampFrames);
 void ABEngineSetGains(ABEngine *engine, float input, float output);

@@ -2,9 +2,11 @@ import AppKit
 import AudioBridgeCore
 import AudioBridgeDiscovery
 import AudioBridgeEngine
+import AudioBridgeAU
 import AVFAudio
 import Combine
 import Foundation
+import Darwin
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -23,6 +25,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var customBufferFrames: UInt32?
     @Published private(set) var inputTrim: Double = 0
     @Published private(set) var outputGain: Double = 0
+    @Published private(set) var auChain = AUChain()
+    @Published private(set) var auCatalog: [AUListing] = []
+    @Published private(set) var auCatalogLoading = false
+    @Published private(set) var auEditorOpen = false
+    private var auEditor: Process?
+    private var auEditorDirectory: URL?
     private let engine = AudioBridgeEngine()
     private var routingGeneration: UInt64 = 0
     private var manuallyStopped = false
@@ -32,7 +40,7 @@ final class AppModel: ObservableObject {
     private var observation: CatalogObservation?
     private var pendingRefresh = false
     private var canSave = true
-    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning }
+    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen }
     var canStartRouting: Bool {
         startUnavailableReason == nil
     }
@@ -42,12 +50,24 @@ final class AppModel: ObservableObject {
         if let inputIssue { return inputIssue }
         if let outputIssue { return outputIssue }
         if AVAudioApplication.shared.recordPermission != .granted { return "Grant microphone permission before starting." }
+        if auEditorOpen { return "Save or close the AU editor before starting." }
+        if !auChain.active.isEmpty {
+            if auCatalogLoading { return "Discovering installed Audio Units…" }
+            if let missing = auChain.active.first(where: { effect in !auCatalog.contains(where: { $0.id == effect.identity }) }) {
+                return "Selected Audio Unit is unavailable: \(missing.name). Remove it or explicitly bypass it."
+            }
+            if selectedBufferFrames < 256 { return "An AU chain needs at least 256 buffer frames." }
+        }
         return routeReadiness
     }
     var canStopRouting: Bool { routingRequested || routingTransitioning || routingFault != nil }
 
     init() {
         let preferences = UserDefaults.standard
+        if let saved = preferences.data(forKey: "AudioBridge.auChain") {
+            do { auChain = try JSONDecoder().decode(AUChain.self, from: saved); try auChain.validate() }
+            catch { self.error = "Saved AU chain could not be read: \(error.localizedDescription). Existing data retained."; canSave = false }
+        }
         if let saved = preferences.object(forKey: "AudioBridge.bufferFrames") as? NSNumber,
            saved.int64Value > 0, saved.int64Value <= 32768 { customBufferFrames = saved.uint32Value }
         for (key, direction) in [("AudioBridge.inputTrim", AudioDirection.input), ("AudioBridge.outputGain", .output)] {
@@ -64,6 +84,7 @@ final class AppModel: ObservableObject {
         observation?.watch([])
         checkPermission()
         refresh()
+        refreshAudioUnits()
     }
     var inputIssue: String? { selection.input.issue(in: catalog.devices, direction: .input) }
     var outputIssue: String? { selection.output.issue(in: catalog.devices, direction: .output) }
@@ -129,7 +150,7 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, updated: { [weak self] snapshot in
+                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -176,7 +197,7 @@ final class AppModel: ObservableObject {
         customBufferFrames = nil
         UserDefaults.standard.removeObject(forKey: "AudioBridge.bufferFrames")
     }
-    var bufferMinimum: UInt32 { max(16, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
+    var bufferMinimum: UInt32 { max(auChain.active.isEmpty ? 16 : 256, max(device(.input)?.bufferFrames ?? 16, device(.output)?.bufferFrames ?? 16)) }
     var bufferMaximum: UInt32 { 32768 }
     var selectedBufferFrames: UInt32 { customBufferFrames ?? bufferProfile.targetFrames(deviceBuffer: min(4096, bufferMinimum)) }
     func setBufferFrames(_ frames: UInt32) {
@@ -199,7 +220,83 @@ final class AppModel: ObservableObject {
         catch { return error.localizedDescription }
     }
     func quit() {
+        if let editor = auEditor, editor.isRunning {
+            editor.terminate()
+            if editor.isRunning { _ = kill(editor.processIdentifier, SIGKILL) }
+        }
         engine.stop { _ in Task { @MainActor in NSApplication.shared.terminate(nil) } }
+    }
+    func refreshAudioUnits() {
+        guard !auCatalogLoading else { return }
+        auCatalogLoading = true
+        probeQueue.async { [weak self] in
+            let catalog = AUCatalog.effects()
+            Task { @MainActor in self?.auCatalog = catalog; self?.auCatalogLoading = false }
+        }
+    }
+    func updateAUChain(_ chain: AUChain) {
+        guard canEditSelections, !auEditorOpen else { return }
+        do {
+            try chain.validate()
+            UserDefaults.standard.set(try JSONEncoder().encode(chain), forKey: "AudioBridge.auChain")
+            auChain = chain
+        } catch { self.error = error.localizedDescription }
+    }
+    func addAU(_ listing: AUListing) {
+        var next = auChain; next.effects.append(AUEffect(identity: listing.id, name: listing.name)); updateAUChain(next)
+    }
+    func setAUEnabled(_ enabled: Bool, id: UUID) {
+        var next = auChain
+        guard let index = next.effects.firstIndex(where: { $0.id == id }) else { return }
+        next.effects[index].enabled = enabled; updateAUChain(next)
+    }
+    func removeAU(id: UUID) { var next = auChain; next.effects.removeAll { $0.id == id }; updateAUChain(next) }
+    func moveAU(id: UUID, offset: Int) {
+        var next = auChain
+        guard let index = next.effects.firstIndex(where: { $0.id == id }), next.effects.indices.contains(index + offset) else { return }
+        next.effects.swapAt(index, index + offset); updateAUChain(next)
+    }
+    func editAU(_ effect: AUEffect) {
+        guard canEditSelections, !auEditorOpen else { return }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-editor-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let input = directory.appendingPathComponent("input.json"), output = directory.appendingPathComponent("saved.json")
+            try JSONEncoder().encode(effect).write(to: input, options: .atomic)
+            let process = Process()
+            process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AudioBridgeAUWorker")
+            process.arguments = ["edit", input.path, output.path]
+            process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { [weak self] process in
+                Task { @MainActor in
+                    guard let self else { try? FileManager.default.removeItem(at: directory); return }
+                    self.auEditorOpen = false; self.auEditor = nil; self.auEditorDirectory = nil
+                    defer { try? FileManager.default.removeItem(at: directory) }
+                    do {
+                        if FileManager.default.fileExists(atPath: output.path) {
+                            let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
+                            guard let size = attributes[.size] as? NSNumber, size.intValue <= 16 * 1024 * 1024 else {
+                                throw AUError("AU editor returned oversized state.")
+                            }
+                            let saved = try JSONDecoder().decode(AUEffect.self, from: Data(contentsOf: output))
+                            guard saved.id == effect.id, saved.identity == effect.identity,
+                                  let index = self.auChain.effects.firstIndex(where: { $0.id == effect.id }) else { throw AUError("AU editor returned a different effect identity.") }
+                            var next = self.auChain; next.effects[index].state = saved.state; self.updateAUChain(next)
+                        } else if process.terminationStatus != 0 {
+                            self.error = "AU editor exited unexpectedly. Previous plugin settings retained."
+                        }
+                    } catch { self.error = "Unable to save AU settings: \(error.localizedDescription)" }
+                }
+            }
+            try process.run(); auEditor = process; auEditorDirectory = directory; auEditorOpen = true
+        } catch { try? FileManager.default.removeItem(at: directory); self.error = "Unable to open AU editor: \(error.localizedDescription)" }
+    }
+    func cancelAUEditor() {
+        guard let process = auEditor, process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        }
     }
     func refresh() {
         checkPermission()

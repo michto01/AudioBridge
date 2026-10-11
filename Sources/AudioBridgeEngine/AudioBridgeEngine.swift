@@ -1,4 +1,5 @@
 import AudioBridgeCore
+import AudioBridgeAU
 import AudioBridgeDiscovery
 import AudioBridgeRealtime
 import Foundation
@@ -22,6 +23,8 @@ public struct EngineSnapshot: Sendable {
     public let capacity: UInt32
     public let targetFrames: UInt32
     public let rawInputClips: [UInt64]
+    public let auLatencySeconds: Float
+    public let auProcessedFrames: UInt64
 }
 
 public struct MeterLevel: Sendable {
@@ -47,12 +50,16 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private var lastDeviceCheck = Date.distantPast
     private var lastInputActivity: Date?
     private var lastOutputActivity: Date?
+    private var auHost: AUHostContext?
+    private let preparationLock = NSLock()
+    private var preparationCancelled = false
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(),
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
         queue.async { [self] in
             do {
                 guard context == nil else { throw Phase2Plan.PlanError("The previous engine has not fully stopped. Stop it before starting again.") }
@@ -64,6 +71,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next
+                if !effects.active.isEmpty {
+                    guard next.prefill >= 256 else { throw AUError("An AU chain needs at least 256 frames of bridge startup fill.") }
+                    auHost = try AUHostContext(chain: effects, plan: next, cancelled: { [self] in
+                        self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
+                    })
+                    guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
+                }
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
                 let status = ABEngineStart(created)
                 guard status == 0 else {
@@ -78,10 +92,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 timer.setEventHandler { [weak self] in self?.poll(updated: updated) }
                 timer.resume()
                 completion(.success(()))
-            } catch { completion(.failure(error)) }
+            } catch {
+                let cleanup = stopOnQueue()
+                completion(.failure(AUError(error.localizedDescription + (cleanup.map { " \($0)" } ?? ""))))
+            }
         }
     }
     public func stop(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        preparationLock.lock(); preparationCancelled = true; preparationLock.unlock()
         queue.async { [self] in
             if let error = stopOnQueue() { completion(.failure(Phase2Plan.PlanError(error))) }
             else { completion(.success(())) }
@@ -106,6 +124,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         let outputActive = lastOutputActivity.map { now.timeIntervalSince($0) <= grace } ?? false
         previousInputCallbacks = metrics.inputCallbacks; previousOutputCallbacks = metrics.outputCallbacks
         var fault: String?
+        if let auFault = auHost?.fault() { fault = auFault }
         if metrics.formatFaults > 0 { fault = "Audio buffer layout changed or became invalid. Refresh devices and start again." }
         else if elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true) || !metrics.primed) {
@@ -127,6 +146,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             }
           } catch { fault = "Device recheck failed: \(error.localizedDescription)" }
         }
+        let auLatency = auHost?.latencySeconds ?? 0
+        let auFrames = auHost?.processedFrames ?? 0
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)" }
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
@@ -139,7 +160,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                            MeterLevel(amplitude: metrics.outputLevels.peak2, clippedSamples: metrics.outputLevels.clips2)],
             inputActive: inputActive, outputActive: outputActive && metrics.primed,
             capacity: plan.capacity, targetFrames: plan.prefill,
-            rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2])
+            rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
+            auLatencySeconds: auLatency, auProcessedFrames: auFrames)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {
@@ -147,12 +169,19 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         guard let context else { return nil }
         let status = ABEngineStop(context)
         if ABEngineDestroy(context) { self.context = nil; plan = nil }
-        else { return "HAL teardown could not be confirmed. Callback memory is retained; restart the app before another route." }
+        else {
+            auHost?.close(releaseMapping: false); auHost = nil
+            return "HAL teardown could not be confirmed. Callback memory is retained; restart the app before another route."
+        }
+        auHost?.close(); auHost = nil
         return status == 0 ? nil : "Device stop reported OSStatus \(status); callbacks were detached."
     }
     deinit {
         // No timer owns this object; queued methods retain it until their lifecycle work finishes.
         watchdog?.setEventHandler {}; watchdog?.cancel()
-        if let context { _ = ABEngineDestroy(context) } // Failed teardown deliberately retains C memory.
+        if let context {
+            let detached = ABEngineDestroy(context)
+            auHost?.close(releaseMapping: detached)
+        }
     }
 }

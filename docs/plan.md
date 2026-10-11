@@ -49,6 +49,8 @@ User-authorized preliminary slices: local signal meters, compact FIFO buffer set
 
 ## Phase 4 — Supervision and UI
 
+User-authorized AU extension: installed effect catalog, persisted ordered chain, separate editor/render helper, and trim controls above meters implemented. See [AU hosting results](au-hosting-results.md). This expands the original DSP scope but does not pass Phase 3–5 gates or establish unattended readiness.
+
 - Build supervisor state machine with desired-vs-observed state, bounded backoff and UID-driven reconnection.
 - Implement menu-bar popover, settings window, diagnostics and configuration migration.
 - Implement login item via `SMAppService` as appropriate for app packaging and installation method.

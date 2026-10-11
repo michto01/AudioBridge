@@ -9,6 +9,7 @@ trap 'rm -rf "$STAGE"' EXIT
 ditto --norsrc "$APP" "$STAGE/AudioBridge.app"
 xattr -r -d com.apple.FinderInfo "$STAGE/AudioBridge.app" || true
 xattr -r -d com.apple.ResourceFork "$STAGE/AudioBridge.app" || true
+codesign --force --sign - "$STAGE/AudioBridge.app/Contents/Helpers/AudioBridgeAUWorker"
 codesign --force --sign - "$STAGE/AudioBridge.app"
 codesign --verify --deep --strict --verbose=2 "$STAGE/AudioBridge.app"
 ditto --norsrc "$STAGE/AudioBridge.app" "$APP"

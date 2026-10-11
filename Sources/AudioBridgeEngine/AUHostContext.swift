@@ -1,0 +1,78 @@
+import AudioBridgeAU
+import AudioBridgeRealtime
+import Foundation
+import Darwin
+
+/// Process orchestration only. The mapping is released only after HAL callbacks detach.
+final class AUHostContext {
+    var transport: OpaquePointer?
+    let process = Process()
+    private let directory: URL
+    private var heartbeat: UInt64 = 0
+    private var lastHeartbeat = ProcessInfo.processInfo.systemUptime
+    var latencySeconds: Float { transport.map { ABAUTransportSnapshot($0).latencySeconds } ?? 0 }
+    var processedFrames: UInt64 { transport.map { ABAUTransportSnapshot($0).processedFrames } ?? 0 }
+
+    init(chain: AUChain, plan: Phase2Plan, cancelled: () -> Bool) throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        do {
+            try chain.validate()
+            let name = "/abau" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(22)
+            guard let mapping = ABAUTransportCreate(String(name), plan.capacity) else { throw AUError("Cannot allocate AU shared memory.") }
+            transport = mapping
+            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: 256)
+            let configuration = directory.appendingPathComponent("request.json")
+            try JSONEncoder().encode(request).write(to: configuration, options: .atomic)
+            process.executableURL = Self.workerURL
+            process.arguments = ["render", String(name), configuration.path]
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let deadline = ProcessInfo.processInfo.systemUptime + 30
+            while true {
+                if cancelled() { throw AUError("AU preparation cancelled.") }
+                let facts = ABAUTransportSnapshot(mapping)
+                if facts.fault != 0 { throw AUError("AU chain could not prepare (OSStatus \(facts.fault)). Check selected plugins and saved settings.") }
+                if facts.ready { ABAUTransportUnlink(mapping); break }
+                if !process.isRunning { throw AUError("AU helper exited while preparing. The plugin may be missing, incompatible or awaiting authorization.") }
+                if ProcessInfo.processInfo.systemUptime > deadline { throw AUError("AU preparation timed out. Routing was not started.") }
+                usleep(10_000)
+            }
+            lastHeartbeat = ProcessInfo.processInfo.systemUptime
+        } catch { close(); throw error }
+    }
+    static var workerURL: URL {
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            return Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AudioBridgeAUWorker")
+        }
+        return URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("AudioBridgeAUWorker")
+    }
+    func fault() -> String? {
+        guard let transport else { return "AU shared memory is unavailable." }
+        let facts = ABAUTransportSnapshot(transport)
+        if facts.fault != 0 { return "AU render failed (OSStatus \(facts.fault)); routing stopped without bypassing the chain." }
+        if !process.isRunning { return "AU helper exited; routing stopped without bypassing the chain." }
+        if facts.heartbeat != heartbeat { heartbeat = facts.heartbeat; lastHeartbeat = ProcessInfo.processInfo.systemUptime }
+        if ProcessInfo.processInfo.systemUptime - lastHeartbeat > 2 { return "AU helper stopped responding; routing stopped without bypassing the chain." }
+        return nil
+    }
+    func close(releaseMapping: Bool = true) {
+        if let transport { ABAUTransportShutdown(transport) }
+        if process.isRunning {
+            process.terminate()
+            let deadline = ProcessInfo.processInfo.systemUptime + 0.5
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < deadline { usleep(10_000) }
+            if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        }
+        if let transport {
+            ABAUTransportUnlink(transport)
+            if releaseMapping { ABAUTransportClose(transport) }
+            // Failed HAL detach deliberately retains the mapping, even after this Swift owner ends.
+            self.transport = nil
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+    deinit { close() }
+}

@@ -108,7 +108,13 @@ struct ABEngine {
     _Atomic uint64_t rawInputClips1, rawInputClips2;
     ABGainRamp inputGain, outputGain;
     uint32_t rampFrames;
+    ABAUTransport *au;
 };
+
+bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport) {
+    if (!engine || engine->inputProc || engine->outputProc) return false;
+    engine->au = transport; return true;
+}
 
 static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
 static float bits_float(uint32_t bits) { float value; memcpy(&value, &bits, sizeof(value)); return value; }
@@ -199,7 +205,8 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
             apply_gain(engine->inputScratch, frames, &engine->inputGain,
                 bits_float(atomic_load_explicit(&engine->inputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
             publish_levels(engine, ABMeasureStereo(engine->inputScratch, frames), true);
-            uint32_t written = ABRingWrite(engine->ring, engine->inputScratch, frames);
+            uint32_t written = engine->au ? ABAUCaptureWrite(engine->au, engine->inputScratch, frames)
+                : ABRingWrite(engine->ring, engine->inputScratch, frames);
             atomic_fetch_add_explicit(&engine->inputFrames, written, memory_order_relaxed);
             atomic_fetch_add_explicit(&engine->overrunFrames, frames - written, memory_order_relaxed);
         } else atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
@@ -220,10 +227,11 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
         if (buffer_frames(output, engine->outputLayout, &frames) && frames <= engine->scratchFrames) {
             ABLevels levels = {0};
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
-                && ABRingAvailable(engine->ring) >= engine->prefill)
+                && (engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring)) >= engine->prefill)
                 atomic_store_explicit(&engine->primed, true, memory_order_release);
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
-                uint32_t read = ABRingRead(engine->ring, engine->outputScratch, frames);
+                uint32_t read = engine->au ? ABAUOutputRead(engine->au, engine->outputScratch, frames)
+                    : ABRingRead(engine->ring, engine->outputScratch, frames);
                 apply_gain(engine->outputScratch, frames, &engine->outputGain,
                     bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
                 for (uint32_t i = 0; i < frames; ++i) {
@@ -336,7 +344,7 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     AB_LOAD(inputCallbacks); AB_LOAD(outputCallbacks); AB_LOAD(inputFrames); AB_LOAD(outputFrames);
     AB_LOAD(underrunFrames); AB_LOAD(overrunFrames); AB_LOAD(formatFaults); AB_LOAD(primed);
 #undef AB_LOAD
-    result.bufferedFrames = ABRingAvailable(engine->ring);
+    result.bufferedFrames = engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring);
     result.inputLevels.peak1 = bits_float(atomic_load_explicit(&engine->inputPeak1, memory_order_relaxed));
     result.inputLevels.peak2 = bits_float(atomic_load_explicit(&engine->inputPeak2, memory_order_relaxed));
     result.outputLevels.peak1 = bits_float(atomic_load_explicit(&engine->outputPeak1, memory_order_relaxed));

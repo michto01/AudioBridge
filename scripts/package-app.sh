@@ -20,6 +20,9 @@ STAGE="$(mktemp -d "$DIST/.package.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/AudioBridge.app/Contents/MacOS" "$STAGE/AudioBridge.app/Contents/Resources"
 cp "$BINARY" "$STAGE/AudioBridge.app/Contents/MacOS/AudioBridge"
+mkdir -p "$STAGE/AudioBridge.app/Contents/Helpers"
+cp "$BINARY_DIR/AudioBridgeAUWorker" "$STAGE/AudioBridge.app/Contents/Helpers/AudioBridgeAUWorker"
+chmod 755 "$STAGE/AudioBridge.app/Contents/Helpers/AudioBridgeAUWorker"
 chmod 755 "$STAGE/AudioBridge.app/Contents/MacOS/AudioBridge"
 cp "$ROOT/Resources/Info.plist" "$STAGE/AudioBridge.app/Contents/Info.plist"
 # Build a complete macOS icon family from the user-supplied source artwork.

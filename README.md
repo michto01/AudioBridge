@@ -50,6 +50,14 @@ File Provider storage on the development machine attaches Finder metadata that c
 
 See [Phase 0 results](docs/phase-0-results.md), [Phase 1 results](docs/phase-1-results.md) and [Phase 2 results and deferred checks](docs/phase-2-results.md) for actual checks and remaining acceptance steps.
 
+## Installed Audio Unit effects
+
+Input trim and output gain sit above their meters in Settings → Audio and the menu popover. Settings → Audio → Audio Unit effects lists installed AU effects. Stop routing to add, reorder, bypass or remove up to eight slots. **Edit** opens a separate helper window with the plugin's editor where available, otherwise generic parameters and factory presets. **Save settings** stores plugin state; the next Start loads it. Close editor cancels without changing saved state.
+
+The chain order is input trim → enabled AU effects → output gain. Effects must accept stereo planar Float32 at the route's sample rate; optional additional buses are disabled, with no sidechain or MIDI routing. Active effects require at least 256 startup frames. Missing plugins, preparation timeout, helper exit, render error or stalled helper stop routing without silently substituting or bypassing an effect. Plugin latency is reported separately, not claimed as measured end-to-end latency. VST hosting is not included.
+
+Plugins run in a separate signed helper using shared-memory audio queues, outside HAL callbacks. This isolates process crashes, not security privileges: third-party code retains the user's access and may have its own licensing or network behavior. Compatibility and performance remain untested. Drift compensation, automatic recovery, login startup and long-duration validation are still required for unattended operation. See [AU hosting results and deferred checks](docs/au-hosting-results.md).
+
 ## Decisions already locked
 
 - Launch at login; automatically route when configured devices are present.

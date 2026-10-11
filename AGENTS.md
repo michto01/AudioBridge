@@ -12,7 +12,7 @@ You are implementing a **native macOS 14+ SwiftUI menu-bar audio bridge**. Read 
 - 2×2 channel matrix, smooth gain, per-channel meters, no silence notifications.
 - Independently clocked input/output require actual drift compensation; do not claim a plain FIFO solves clock drift.
 - Indefinite recovery from recoverable faults with bounded retry backoff. Permission/configuration faults require action, not retry storms.
-- No audio recording, network transport, cloud service, or extra DSP features in v1.
+- No audio recording, network transport or cloud service. User explicitly authorized installed third-party AU effect hosting on 2026-10-11; other extra DSP remains outside scope.
 
 ## Engineering practices
 

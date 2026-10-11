@@ -16,8 +16,10 @@ struct AudioBridgeApp: App {
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
+                GainControl(model: model, direction: .input)
                 SignalMeters(model: model, direction: .input)
                 Text("Output: \(endpointName(.output))")
+                GainControl(model: model, direction: .output)
                 SignalMeters(model: model, direction: .output)
                 if let issue = model.inputIssue { Text(issue).font(.caption) }
                 if let issue = model.outputIssue { Text(issue).font(.caption) }
@@ -64,6 +66,7 @@ private struct SettingsView: View {
                     }
                     endpointPicker(.input)
                     endpointPicker(.output)
+                    AUEffectsView(model: model)
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -130,7 +133,7 @@ private struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.title2)
                 Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 2 experimental audio path")
-                Text("Audio stays on this Mac. No recording, network transport or third-party dependencies.")
+                Text("The bridge does not record or transmit audio. Third-party Audio Units run separately and control their own behavior.")
             }.padding().tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding().frame(width: 680, height: 580)
@@ -169,8 +172,8 @@ private struct SettingsView: View {
                     Button("Use mono input in both lanes") { model.duplicateMonoInput() }
                         .disabled(!model.canEditSelections)
                 }
-                SignalMeters(model: model, direction: direction)
                 GainControl(model: model, direction: direction)
+                SignalMeters(model: model, direction: direction)
                 if direction == .input, let raw = model.engineSnapshot?.rawInputClips, raw.contains(where: { $0 > 0 }) {
                     Text("Input reached full scale before trim. Digital attenuation cannot repair capture clipping.")
                         .font(.caption).foregroundStyle(.orange)
