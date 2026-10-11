@@ -80,7 +80,7 @@ final class AppModel: ObservableObject {
                     var icons: [String: NSImage] = [:]
                     for device in snapshot.devices {
                         guard let url = device.iconURL, url.isFileURL else { continue }
-                        if let image = self.iconCache[url] ?? NSImage(contentsOf: url) {
+                        if let image = self.iconCache[url] ?? NSImage(contentsOf: url).flatMap(Self.menuIcon) {
                             self.iconCache[url] = image
                             icons[device.uid] = image
                         }
@@ -96,6 +96,31 @@ final class AppModel: ObservableObject {
                 if self.pendingRefresh { self.pendingRefresh = false; self.refresh() }
             }
         }
+    }
+    /// Native Picker menus can extract NSImage directly and bypass SwiftUI's frame.
+    /// Rasterize at font size so both its intrinsic dimensions and pixels are bounded.
+    private static func menuIcon(_ source: NSImage) -> NSImage? {
+        let points = NSFont.systemFontSize
+        let pixels = Int(ceil(points * 2))
+        guard source.size.width > 0, source.size.height > 0,
+              source.size.width.isFinite, source.size.height.isFinite,
+              let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels,
+                  pixelsHigh: pixels, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                  isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        let scale = min(CGFloat(pixels) / source.size.width, CGFloat(pixels) / source.size.height)
+        let size = NSSize(width: source.size.width * scale, height: source.size.height * scale)
+        let rect = NSRect(x: (CGFloat(pixels) - size.width) / 2,
+                          y: (CGFloat(pixels) - size.height) / 2,
+                          width: size.width, height: size.height)
+        source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        bitmap.size = NSSize(width: points, height: points)
+        let result = NSImage(size: bitmap.size)
+        result.addRepresentation(bitmap)
+        return result
     }
     func checkPermission() {
         switch AVAudioApplication.shared.recordPermission {

@@ -1,4 +1,5 @@
 import AudioBridgeCore
+import AppKit
 import SwiftUI
 
 /// Prefer the device/driver-provided Core Audio icon; use a native class symbol otherwise.
@@ -15,7 +16,8 @@ struct DeviceIcon: View {
                 Image(systemName: fallbackSymbol).resizable().scaledToFit()
             }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: NSFont.systemFontSize, height: NSFont.systemFontSize)
+        .clipped()
         .accessibilityHidden(true)
     }
     private var fallbackSymbol: String {

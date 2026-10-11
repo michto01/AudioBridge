@@ -6,6 +6,8 @@ Follow-up: user confirmed that selections survive relaunch and microphone permis
 
 Device selectors now query the SDK's `kAudioDevicePropertyIcon` (caller-owned CFURL to an image file) and display that image when available and readable. Local file URLs only; unavailable icons use native SF Symbols by transport/direction. Icons are cached by URL and selected by UID; they do not affect routing identity. Device icon property changes are observed. Build, bundle assembly, ad-hoc signing and strict verification passed for this follow-up; UI icon rendering still needs visual review.
 
+Icon sizing follow-up: user reported that the Teams icon was oversized in the native picker despite the SwiftUI frame. Driver images are now rasterized to system font point size with a bounded 2× bitmap and preserved aspect ratio before caching. The view also uses font-size bounds and clipping. This constrains the underlying NSImage even when the native menu bypasses SwiftUI layout. Visual confirmation of the corrected Teams picker remains pending.
+
 ## Implemented slice
 
 Shared read-only Core Audio catalog and `AudioBridgeProbe` CLI; input/output UID pickers; explicit one-based physical channel selection for two logical lanes; versioned selection persistence; missing endpoint/channel state; Core Audio property listeners; microphone authorization status and one explicit request button; permission recovery guidance; device diagnostics and timestamped JSON export. The app owns the catalog independently of settings/popover lifetime. No vendor branches, dependencies, device/default/rate mutations or audio IO were added. Routing, meters, login and DSP remain unimplemented.
