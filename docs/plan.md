@@ -59,6 +59,8 @@ Review repair: 0.3.8/build 17 brings Settings forward, keeps drift learning acti
 
 ## Phase 4 — Supervision and UI
 
+Current implementation: user authorized advancing on 2026-10-12 despite deferred earlier acceptance checks. Version 0.4.0/build 19 implements desired/observed separation, capped recovery, explicit launch resume, persisted Stop, recovery diagnostics and SMAppService login controls. See [Phase 4 results](phase-4-results.md). Compilation and bundle checks are recorded there; reconnect, login, race and hardware gates remain **not run**. Stop for review before Phase 5 hardening/distribution.
+
 User-authorized AU extension: installed effect catalog, persisted ordered chain, separate editor/render helper, and trim controls above meters implemented. See [AU hosting results](au-hosting-results.md). This expands the original DSP scope but does not pass Phase 3–5 gates or establish unattended readiness.
 
 Follow-up: live chain insertion/removal, same-instance parameter editing, automatic editor sizing and whole-chain bypass implemented; see [live AU results](live-au-results.md). Runtime acceptance, transition behavior and the reported allocation failure remain unverified.

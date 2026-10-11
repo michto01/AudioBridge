@@ -133,10 +133,10 @@ private struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button(model.refreshing ? "Refreshing…" : "Refresh devices and permission") { model.refresh() }
                         .disabled(model.refreshing)
-                    if model.routingRequested || model.routingTransitioning {
+                    if model.recovery.desired || model.routingRequested || model.routingTransitioning {
                         Text("Stop routing to change devices. Routing grid and gains can change live.").font(.caption)
                     }
-                    Text("Automatic recovery and login controls are not yet implemented.")
+                    Text("Recoverable failures retry the selected route. Resume and login options are in General.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
             }.tabItem { Label("Audio", systemImage: "waveform") }
@@ -151,13 +151,17 @@ private struct SettingsView: View {
                     AUEffectsView(model: model)
                 }.padding()
             }.tabItem { Label("Effects", systemImage: "slider.horizontal.3") }
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Launch at login and automatic routing are not yet implemented.")
-                Text("Device UIDs and explicit physical channels are saved on this Mac. A missing endpoint is never replaced with the system default.")
-            }.padding().tabItem { Label("General", systemImage: "gearshape") }
+            GeneralSettingsView(model: model).tabItem { Label("General", systemImage: "gearshape") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
+                    Text("Desired routing: \(model.recovery.desired ? "on" : "off") · resume at launch: \(model.resumeAtLaunch ? "on" : "off") · recovery attempts: \(model.recovery.attempts)")
+                    if let fault = model.lastRecoveryFault { Text("Last recovery fault: \(fault)").font(.caption) }
+                    DisclosureGroup("Recovery history (this session)") {
+                        ForEach(Array(model.recoveryHistory.enumerated()), id: \.offset) { _, event in
+                            Text(event).font(.caption)
+                        }
+                    }
                     Toggle("Show debug information in the interface", isOn: $model.showDebugInformation)
                     Text("Shows live queue, drift, AU timing and detailed delay readouts in Playback and Audio. Off by default at launch; diagnostic reports always include full details.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -201,7 +205,7 @@ private struct SettingsView: View {
             }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.title2)
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 3 experimental audio path")
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 4 experimental supervised routing")
                 Text("The bridge does not record or transmit audio. Third-party Audio Units run separately and control their own behavior.")
             }.padding().tabItem { Label("About", systemImage: "info.circle") }
         }

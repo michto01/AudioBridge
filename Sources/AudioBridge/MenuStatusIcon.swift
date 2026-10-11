@@ -4,6 +4,7 @@ import SwiftUI
 
 extension AppModel {
     var activity: RoutingActivity {
+        if recovery.desired && !routingRequested && !recovery.blocked && error == nil && routingFault == nil { return .starting }
         let s = engineSnapshot
         return RoutingActivity.resolve(fault: routingFault != nil || error != nil,
             requested: routingRequested, transitioning: routingTransitioning,

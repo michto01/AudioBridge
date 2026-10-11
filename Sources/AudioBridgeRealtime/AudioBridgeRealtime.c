@@ -101,6 +101,7 @@ struct ABEngine {
     _Atomic uint32_t inFlight;
     _Atomic uint64_t inputCallbacks, outputCallbacks, inputFrames, outputFrames;
     _Atomic uint64_t underrunFrames, overrunFrames, formatFaults;
+    _Atomic uint64_t layoutFaults;
     // Float bits use lock-free integer atomics; single writer per direction.
     _Atomic uint32_t inputPeak1, inputPeak2, outputPeak1, outputPeak2;
     _Atomic uint64_t inputClips1, inputClips2, outputClips1, outputClips2;
@@ -199,7 +200,10 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
                 : ABRingWrite(engine->ring, engine->inputScratch, frames);
             atomic_fetch_add_explicit(&engine->inputFrames, written, memory_order_relaxed);
             atomic_fetch_add_explicit(&engine->overrunFrames, frames - written, memory_order_relaxed);
-        } else atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&engine->layoutFaults, 1, memory_order_relaxed);
+        }
     }
     atomic_fetch_sub_explicit(&engine->inFlight, 1, memory_order_release);
     return noErr;
@@ -279,7 +283,10 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 atomic_fetch_add_explicit(&engine->underrunFrames, frames, memory_order_relaxed);
             }
             publish_levels(engine, levels, false);
-        } else atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&engine->formatFaults, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&engine->layoutFaults, 1, memory_order_relaxed);
+        }
     }
     atomic_fetch_sub_explicit(&engine->inFlight, 1, memory_order_release);
     return noErr;
@@ -300,6 +307,7 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
     atomic_init(&engine->inputCallbacks, 0); atomic_init(&engine->outputCallbacks, 0);
     atomic_init(&engine->inputFrames, 0); atomic_init(&engine->outputFrames, 0);
     atomic_init(&engine->underrunFrames, 0); atomic_init(&engine->overrunFrames, 0); atomic_init(&engine->formatFaults, 0);
+    atomic_init(&engine->layoutFaults, 0);
     atomic_init(&engine->inputPeak1, 0); atomic_init(&engine->inputPeak2, 0);
     atomic_init(&engine->outputPeak1, 0); atomic_init(&engine->outputPeak2, 0);
     atomic_init(&engine->inputClips1, 0); atomic_init(&engine->inputClips2, 0);
@@ -319,7 +327,8 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
         || !atomic_is_lock_free(&engine->inFlight) || !atomic_is_lock_free(&engine->inputCallbacks)
         || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)
         || !atomic_is_lock_free(&engine->appliedDriftPPMBits) || !atomic_is_lock_free(&engine->refillThresholdFrames)
-        || !atomic_is_lock_free(&engine->driftHeldCallbacks) || !atomic_is_lock_free(&engine->driftLimitedCallbacks)) {
+        || !atomic_is_lock_free(&engine->driftHeldCallbacks) || !atomic_is_lock_free(&engine->driftLimitedCallbacks)
+        || !atomic_is_lock_free(&engine->layoutFaults)) {
         ABEngineDestroy(engine); return NULL;
     }
     return engine;
@@ -378,7 +387,7 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     if (!engine) return result;
 #define AB_LOAD(field) result.field = atomic_load_explicit(&engine->field, memory_order_relaxed)
     AB_LOAD(inputCallbacks); AB_LOAD(outputCallbacks); AB_LOAD(inputFrames); AB_LOAD(outputFrames);
-    AB_LOAD(underrunFrames); AB_LOAD(overrunFrames); AB_LOAD(formatFaults); AB_LOAD(primed);
+    AB_LOAD(underrunFrames); AB_LOAD(overrunFrames); AB_LOAD(formatFaults); AB_LOAD(layoutFaults); AB_LOAD(primed);
 #undef AB_LOAD
     result.bufferedFrames = engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring);
     result.inputLevels.peak1 = bits_float(atomic_load_explicit(&engine->inputPeak1, memory_order_relaxed));

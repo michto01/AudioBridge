@@ -2,7 +2,7 @@
 
 ## User-authorized Audio Unit extension
 
-Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. N×2 physical input mixing and input trim precede the chain; stereo adaptive drift processing and output gain follow it, then physical output fan-out (ADR-002). The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed or stalled helpers stop routing; automatic recovery remains pending; drift implementation requires acceptance. See [implementation evidence and limits](au-hosting-results.md).
+Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. N×2 physical input mixing and input trim precede the chain; stereo adaptive drift processing and output gain follow it, then physical output fan-out (ADR-002). The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed/stalled helpers detach the engine; typed recoverable failures retry with bounded backoff while explicit render/configuration failures require action. Hardware acceptance remains pending. See [Phase 4 evidence](phase-4-results.md).
 
 ## Logical components
 
@@ -43,6 +43,8 @@ The diagram is conceptual: precise order of format conversion, resampling and ma
 - `DiagnosticsService`: structured events, rate-limited error reporting, cumulative glitch counters, optional diagnostic export.
 
 ## State machine
+
+Current implementation uses pure `RecoveryPolicy` for desired state, blocked state and monotonic retry deadlines. AppModel serializes orchestration on the main actor, with attempt generations rejecting late completion/snapshot work. AudioBridgeEngine retains its independent serial lifecycle queue. Main-actor retry tasks never enter HAL callbacks. ServiceManagement registration happens only after explicit interaction with General's login toggle.
 
 `stopped` (manual), `waitingForInput`, `waitingForOutput`, `preparing`, `running`, `degraded`, `recovering`, `faulted` (unrecoverable configuration or permission). Model desired state separately from observed state. Both devices absent must be represented unambiguously in a diagnostic reason.
 

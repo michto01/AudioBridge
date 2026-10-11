@@ -12,6 +12,14 @@ import Darwin
 final class AppModel: ObservableObject {
     // Inspection is opt-in for each launch; never clutter the default interface.
     @Published var showDebugInformation = false
+    @Published private(set) var recovery = RecoveryPolicy()
+    @Published private(set) var recoveryMessage: String?
+    @Published private(set) var lastRecoveryFault: String?
+    @Published private(set) var recoveryHistory: [String] = []
+    @Published private(set) var resumeAtLaunch = false
+    @Published private(set) var restartRequired = false
+    private var retryWork: DispatchWorkItem?
+    private var quitting = false
     @Published private(set) var catalog = CatalogSnapshot(devices: [])
     @Published private(set) var selection = RouteSelection()
     @Published private(set) var error: String?
@@ -40,7 +48,7 @@ final class AppModel: ObservableObject {
     private var pendingAU: AULiveCommand?
     private var editAfterUpdate: UUID?
     private var liveEditor = false
-    var canEditAU: Bool { canSave && !routingTransitioning && !changingDeviceBuffer && !auEditorOpen && !auUpdating }
+    var canEditAU: Bool { canSave && (!recovery.desired || routingRequested) && !routingTransitioning && !changingDeviceBuffer && !auEditorOpen && !auUpdating }
     @Published private(set) var writableBuffers: Set<String> = []
     @Published private(set) var changingDeviceBuffer = false
     @Published private(set) var deviceBufferMessage: String?
@@ -55,11 +63,12 @@ final class AppModel: ObservableObject {
     private var observation: CatalogObservation?
     private var pendingRefresh = false
     private var canSave = true
-    var canEditSelections: Bool { canSave && !routingRequested && !routingTransitioning && !auEditorOpen && !changingDeviceBuffer && !auUpdating }
+    var canEditSelections: Bool { canSave && !recovery.desired && !routingRequested && !routingTransitioning && !auEditorOpen && !changingDeviceBuffer && !auUpdating }
     var canStartRouting: Bool {
         startUnavailableReason == nil
     }
     var startUnavailableReason: String? {
+        if restartRequired { return "Callback teardown was not confirmed. Restart the app before starting again." }
         if changingDeviceBuffer { return "Applying audio interface buffer size…" }
         if selectedBufferFrames < bufferMinimum { return "Startup fill must be at least \(bufferMinimum) frames for the current device buffers." }
         if routingRequested || routingTransitioning { return "Stop routing before starting a new route." }
@@ -76,11 +85,13 @@ final class AppModel: ObservableObject {
         }
         return routeReadiness
     }
-    var canStopRouting: Bool { routingRequested || routingTransitioning || routingFault != nil }
+    var canStopRouting: Bool { recovery.desired || routingRequested || routingTransitioning || routingFault != nil }
     var stoppedByUser: Bool { manuallyStopped }
 
     init() {
         let preferences = UserDefaults.standard
+        resumeAtLaunch = preferences.bool(forKey: "AudioBridge.resumeAtLaunch")
+        manuallyStopped = preferences.object(forKey: "AudioBridge.desiredRouting") as? Bool == false
         if let data = preferences.data(forKey: "AudioBridge.auCatalogCache"), data.count <= 8 * 1024 * 1024 {
             do {
                 let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate()
@@ -107,6 +118,7 @@ final class AppModel: ObservableObject {
         observation = CatalogObservation { [weak self] in self?.refresh() }
         observation?.watch([])
         checkPermission()
+        if RecoveryPolicy.shouldResume(autoResume: resumeAtLaunch, desired: preferences.bool(forKey: "AudioBridge.desiredRouting")) { recovery.start() }
         refresh()
         if auCatalogScannedAt == nil { refreshAudioUnits() }
     }
@@ -115,6 +127,7 @@ final class AppModel: ObservableObject {
     var status: String {
         if routingFault != nil || error != nil { return "Action required" }
         if routingTransitioning { return routingRequested ? "Starting" : "Stopping" }
+        if recovery.desired, !routingRequested, let recoveryMessage { return recoveryMessage }
         if routingRequested {
             if let snapshot = engineSnapshot, !snapshot.primed, snapshot.rebufferEvents > 0 {
                 return "Rebuffering — waiting for audio"
@@ -203,7 +216,7 @@ final class AppModel: ObservableObject {
                     Task { @MainActor in
                         guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                         if case .failure(let error) = result {
-                            self.stopRouting(); self.routingFault = "Routing change failed: \(error.localizedDescription)"
+                            self.stopForActionRequired("Routing change failed: \(error.localizedDescription)")
                         }
                     }
                 }
@@ -217,6 +230,14 @@ final class AppModel: ObservableObject {
     }
     func startRouting() {
         guard canStartRouting else { return }
+        retryWork?.cancel(); retryWork = nil
+        recovery.start(); recoveryMessage = nil
+        beginRoutingAttempt()
+    }
+    private func beginRoutingAttempt() {
+        guard recovery.desired, !quitting else { return }
+        recovery.attempting(now: ProcessInfo.processInfo.systemUptime)
+        recordRecovery("Preparing explicitly selected route")
         routingGeneration &+= 1
         let generation = routingGeneration
         routingFault = nil; engineSnapshot = nil; manuallyStopped = false
@@ -243,13 +264,11 @@ final class AppModel: ObservableObject {
                     } else { self.editAfterUpdate = nil }
                 }
                 if let fault = snapshot.fault {
-                    self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
-                    self.routingRequested = false
-                    UserDefaults.standard.set(false, forKey: "AudioBridge.desiredRouting")
-                    self.routingFault = fault
+                    self.handleRoutingFailure(fault, kind: snapshot.faultKind ?? .actionRequired)
                 } else if AVAudioApplication.shared.recordPermission != .granted {
-                    self.stopRouting()
-                    self.routingFault = "Microphone permission is no longer granted. Restore permission before starting again."
+                    self.stopForActionRequired("Microphone permission is no longer granted. Restore permission before starting again.")
+                } else if snapshot.primed && snapshot.inputActive && snapshot.outputActive && !snapshot.recentGlitches {
+                    self.recovery.healthy(seconds: snapshot.glitchCleanSeconds)
                 }
             }
         }, completion: { [weak self] result in
@@ -257,14 +276,17 @@ final class AppModel: ObservableObject {
                 guard let self, self.routingGeneration == generation else { return }
                 self.routingTransitioning = false
                 if case .failure(let error) = result {
-                    self.routingRequested = false
-                    UserDefaults.standard.set(false, forKey: "AudioBridge.desiredRouting")
-                    self.routingFault = error.localizedDescription
+                    self.handleRoutingFailure(error.localizedDescription, kind: (error as? BridgeFailure)?.kind ?? .actionRequired)
+                } else {
+                    self.recordRecovery("HAL started; callback confirmation pending")
                 }
             }
         })
     }
     func stopRouting() {
+        recordRecovery("Manual Stop; automatic retries and launch resume suppressed")
+        recovery.stop(); recoveryMessage = nil
+        retryWork?.cancel(); retryWork = nil
         pendingAU = nil; auUpdating = false; editAfterUpdate = nil
         if liveEditor { liveEditor = false; auEditorOpen = false }
         // Persist deliberate Stop before acknowledging it; no retry or reconnect can override it.
@@ -277,9 +299,84 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation else { return }
                 self.routingTransitioning = false
-                if case .failure(let error) = result { self.routingFault = error.localizedDescription }
+                if case .failure(let error) = result {
+                    self.routingFault = error.localizedDescription; self.restartRequired = true
+                }
             }
         }
+    }
+    private func handleRoutingFailure(_ message: String, kind: BridgeFailureKind) {
+        recordRecovery("\(kind.rawValue): \(message)")
+        routingGeneration &+= 1 // Invalidate late callbacks/completions from this attempt.
+        pendingAU = nil; auUpdating = false; liveEditor = false; auEditorOpen = false; editAfterUpdate = nil
+        routingRequested = false; routingTransitioning = false
+        recovery.failed(kind, now: ProcessInfo.processInfo.systemUptime)
+        lastRecoveryFault = message
+        if kind == .recoverable {
+            routingFault = nil; recoveryMessage = "Recovering — retry scheduled"
+            refresh(); scheduleRetry()
+        } else {
+            routingFault = message; recoveryMessage = nil
+            if kind == .unsafeTeardown { restartRequired = true }
+            retryWork?.cancel(); retryWork = nil
+        }
+    }
+    private func recordRecovery(_ message: String) {
+        recoveryHistory.append("\(ISO8601DateFormatter().string(from: Date())) · \(message)")
+        if recoveryHistory.count > 50 { recoveryHistory.removeFirst(recoveryHistory.count - 50) }
+    }
+    private func stopForActionRequired(_ message: String) {
+        recovery.failed(.actionRequired, now: ProcessInfo.processInfo.systemUptime)
+        retryWork?.cancel(); retryWork = nil
+        routingGeneration &+= 1
+        let generation = routingGeneration
+        routingRequested = false; routingTransitioning = true; routingFault = message
+        engine.stop { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.routingGeneration == generation else { return }
+                if case .failure(let error) = result {
+                    self.handleRoutingFailure("\(message) \(error.localizedDescription)", kind: .unsafeTeardown)
+                } else { self.handleRoutingFailure(message, kind: .actionRequired) }
+            }
+        }
+    }
+    private func scheduleRetry() {
+        retryWork?.cancel()
+        guard recovery.desired, !recovery.blocked, !quitting, let deadline = recovery.retryAt else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.recovery.due(now: ProcessInfo.processInfo.systemUptime), !self.routingTransitioning else { return }
+            self.attemptRecovery()
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline - ProcessInfo.processInfo.systemUptime), execute: work)
+    }
+    private func attemptRecovery() {
+        guard recovery.desired, !recovery.blocked, !routingRequested, !routingTransitioning, !quitting else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        recovery.attempting(now: now)
+        let missing = AudioDirection.allCases.filter { direction in
+            guard let uid = endpoint(direction).uid else { return false }
+            return catalog.devices.first(where: { $0.uid == uid })?.alive != true
+        }
+        if !missing.isEmpty {
+            recoveryMessage = "Waiting for " + missing.map(\.rawValue).joined(separator: " and ")
+            recordRecovery(recoveryMessage!)
+            recovery.failed(.recoverable, now: now); refresh(); scheduleRetry(); return
+        }
+        if auCatalogLoading && auCatalogScannedAt == nil && !auChain.active.isEmpty {
+            recoveryMessage = "Waiting for effect discovery"
+            recovery.failed(.recoverable, now: now); scheduleRetry(); return
+        }
+        checkPermission()
+        if let reason = startUnavailableReason {
+            handleRoutingFailure(reason, kind: .actionRequired); return
+        }
+        recoveryMessage = nil; beginRoutingAttempt()
+    }
+    func setResumeAtLaunch(_ enabled: Bool) {
+        // Enabling this preference never overrides a deliberate Stop.
+        resumeAtLaunch = enabled
+        UserDefaults.standard.set(enabled, forKey: "AudioBridge.resumeAtLaunch")
     }
     func setBufferProfile(_ profile: BufferProfile) {
         guard canEditSelections else { return }
@@ -311,6 +408,8 @@ final class AppModel: ObservableObject {
         catch { return error.localizedDescription }
     }
     func quit() {
+        quitting = true; retryWork?.cancel(); retryWork = nil
+        routingGeneration &+= 1
         if let editor = auEditor, editor.isRunning {
             editor.terminate()
             if editor.isRunning { _ = kill(editor.processIdentifier, SIGKILL) }
@@ -448,7 +547,7 @@ final class AppModel: ObservableObject {
                 if case .failure(let error) = result {
                     self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
                     self.editAfterUpdate = nil; self.error = error.localizedDescription
-                    self.stopRouting(); self.routingFault = "Live AU change could not be applied: \(error.localizedDescription)"
+                    self.stopForActionRequired("Live AU change could not be applied: \(error.localizedDescription)")
                 }
             }
         }
@@ -462,10 +561,12 @@ final class AppModel: ObservableObject {
             catch { self.error = "Unable to update editor bypass indicator: \(error.localizedDescription)" }
         }
         if routingRequested {
+            let generation = routingGeneration
             engine.auControl(bypass: bypass) { [weak self] result in
                 Task { @MainActor in
+                    guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                     if case .failure(let error) = result {
-                        self?.stopRouting(); self?.routingFault = "Chain bypass could not be applied: \(error.localizedDescription)"
+                        self.stopForActionRequired("Chain bypass could not be applied: \(error.localizedDescription)")
                     }
                 }
             }
@@ -480,9 +581,19 @@ final class AppModel: ObservableObject {
             let writable = (try? result.get().devices.filter { CoreAudioCatalog.bufferIsSettable($0.runtimeID) }.map(\.uid)) ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
+                var routeDevicesChanged = false
                 self.writableBuffers = Set(writable)
                 switch result {
                 case .success(let snapshot):
+                    routeDevicesChanged = AudioDirection.allCases.contains { direction in
+                        guard let uid = self.endpoint(direction).uid else { return false }
+                        let old = self.catalog.devices.first { $0.uid == uid }
+                        let new = snapshot.devices.first { $0.uid == uid }
+                        guard let old, let new else { return (old == nil) != (new == nil) }
+                        return old.runtimeID != new.runtimeID || old.alive != new.alive
+                            || old.bufferFrames != new.bufferFrames || old.nominalSampleRate != new.nominalSampleRate
+                            || !old.facts(for: direction).matchesRoutingTopology(new.facts(for: direction))
+                    }
                     var icons: [String: NSImage] = [:]
                     for device in snapshot.devices {
                         guard let url = device.iconURL, url.isFileURL else { continue }
@@ -499,6 +610,12 @@ final class AppModel: ObservableObject {
                     self.catalog = CatalogSnapshot(devices: [], issues: ["Discovery failed: \(error)"])
                 }
                 self.refreshing = false
+                if self.recovery.desired && !self.routingRequested && !self.routingTransitioning && !self.recovery.blocked {
+                    if self.recovery.retryAt == nil { self.attemptRecovery() }
+                    else if routeDevicesChanged {
+                        self.recovery.deviceChanged(now: ProcessInfo.processInfo.systemUptime); self.scheduleRetry()
+                    }
+                }
                 if self.pendingRefresh { self.pendingRefresh = false; self.refresh() }
             }
         }
@@ -586,6 +703,10 @@ final class AppModel: ObservableObject {
             "Time: \(ISO8601DateFormatter().string(from: Date()))",
             "Bundle: \(Bundle.main.bundlePath)", "Status: \(status)", "Microphone permission: \(permission)",
             "Routing requested: \(routingRequested); transitioning: \(routingTransitioning)"]
+        let retrySeconds = recovery.retryAt.map { String(max(0, $0 - ProcessInfo.processInfo.systemUptime)) } ?? "none"
+        lines.append("Desired routing: \(recovery.desired); resume at launch: \(resumeAtLaunch); recovery blocked: \(recovery.blocked); backoff stage: \(recovery.attempts); retry in: \(retrySeconds) seconds; restart required: \(restartRequired)")
+        if let lastRecoveryFault { lines.append("Last recovery fault: \(lastRecoveryFault)") }
+        lines.append(contentsOf: recoveryHistory.suffix(10).map { "Recovery event: \($0)" })
         if let routingFault { lines.append("Routing fault: \(routingFault)") }
         if let error { lines.append("Settings error: \(error)") }
         if let startUnavailableReason, !routingRequested { lines.append("Start unavailable: \(startUnavailableReason)") }

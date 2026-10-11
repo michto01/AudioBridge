@@ -16,6 +16,7 @@ public struct EngineSnapshot: Sendable {
     public let primed: Bool
     public let sampleRate: Double
     public let fault: String?
+    public let faultKind: BridgeFailureKind?
     public let inputLevels: [MeterLevel]
     public let outputLevels: [MeterLevel]
     public let inputActive: Bool
@@ -100,10 +101,17 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
         queue.async { [self] in
+            var failureKind = BridgeFailureKind.actionRequired
             do {
                 guard context == nil else { throw Phase2Plan.PlanError("The previous engine has not fully stopped. Stop it before starting again.") }
                 // Fresh UID resolution and format validation; never use UI runtime IDs or defaults.
+                failureKind = .recoverable
                 let fresh = try CoreAudioCatalog.snapshot()
+                failureKind = .actionRequired
+                if fresh.devices.first(where: { $0.uid == selection.input.uid })?.alive != true
+                    || fresh.devices.first(where: { $0.uid == selection.output.uid })?.alive != true {
+                    failureKind = .recoverable
+                }
                 let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames)
                 guard let created = ABEngineCreate(next.input.device.runtimeID, next.output.device.runtimeID,
                     next.capacity, next.prefill) else {
@@ -124,7 +132,9 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
                 let status = ABEngineStart(created)
                 guard status == 0 else {
+                    failureKind = .recoverable
                     let cleanup = stopOnQueue()
+                    if cleanup != nil { failureKind = .unsafeTeardown }
                     throw Phase2Plan.PlanError("Unable to start the selected devices (OSStatus \(status)). \(cleanup ?? "")")
                 }
                 startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
@@ -139,7 +149,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 completion(.success(()))
             } catch {
                 let cleanup = stopOnQueue()
-                completion(.failure(AUError(error.localizedDescription + (cleanup.map { " \($0)" } ?? ""))))
+                completion(.failure(BridgeFailure(error.localizedDescription + (cleanup.map { " \($0)" } ?? ""),
+                    kind: cleanup == nil ? ((error as? BridgeFailure)?.kind ?? failureKind) : .unsafeTeardown)))
             }
         }
     }
@@ -228,8 +239,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         let outputActive = lastOutputActivity.map { now.timeIntervalSince($0) <= grace } ?? false
         previousInputCallbacks = metrics.inputCallbacks; previousOutputCallbacks = metrics.outputCallbacks
         var fault: String?
-        if let auFault = auHost?.fault() { fault = auFault }
-        if fault == nil, metrics.formatFaults > 0 { fault = "Audio buffer layout changed or became invalid. Refresh devices and start again." }
+        var faultKind = BridgeFailureKind.recoverable
+        if let auFault = auHost?.fault() { fault = auFault.message; faultKind = auFault.kind }
+        if fault == nil, metrics.formatFaults > 0 {
+            fault = "Audio buffer layout changed or became invalid. Refresh devices and start again."
+            faultKind = metrics.layoutFaults > 0 ? .recoverable : .actionRequired
+        }
         else if fault == nil, elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (!metrics.primed && metrics.rebufferEvents == 0)) {
@@ -241,7 +256,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auHost?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
-        // A stale/failed probe makes this experimental path stop safely; recovery is a later phase.
+        // Stop safely on change; the supervisor re-resolves the same UIDs for retry.
         if fault == nil, Date().timeIntervalSince(lastDeviceCheck) >= 0.5 {
           lastDeviceCheck = Date()
           do {
@@ -275,12 +290,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             healthy: fault == nil && metrics.primed && inputActive && outputActive && metrics.outputFrames > 0,
             counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
                 formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
-        if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)" }
+        if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)"; faultKind = .unsafeTeardown }
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
             underrunFrames: metrics.underrunFrames, overrunFrames: metrics.overrunFrames,
             formatFaults: metrics.formatFaults, bufferedFrames: metrics.bufferedFrames,
-            primed: metrics.primed, sampleRate: plan.sampleRate, fault: fault,
+            primed: metrics.primed, sampleRate: plan.sampleRate, fault: fault, faultKind: fault == nil ? nil : faultKind,
             inputLevels: [MeterLevel(amplitude: metrics.inputLevels.peak1, clippedSamples: metrics.inputLevels.clips1),
                           MeterLevel(amplitude: metrics.inputLevels.peak2, clippedSamples: metrics.inputLevels.clips2)],
             outputLevels: [MeterLevel(amplitude: metrics.outputLevels.peak1, clippedSamples: metrics.outputLevels.clips1),

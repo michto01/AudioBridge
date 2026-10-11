@@ -43,7 +43,7 @@ struct PlaybackView: View {
                     }
                 }
                 DelayView(model: model)
-                Text("Experimental routing; automatic recovery is not implemented. Configure devices/buffers in Audio, patches in Routing, and plugins in Effects.")
+                Text("Experimental supervised routing. Stop cancels recovery and stays stopped after relaunch. Configure devices/buffers in Audio, patches in Routing, plugins in Effects and launch behavior in General.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }

@@ -32,6 +32,7 @@ typedef struct {
     uint64_t underrunFrames;
     uint64_t overrunFrames;
     uint64_t formatFaults;
+    uint64_t layoutFaults;
     uint32_t bufferedFrames;
     bool primed;
     ABLevels inputLevels, outputLevels;

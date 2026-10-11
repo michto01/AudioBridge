@@ -1,4 +1,5 @@
 import AudioBridgeAU
+import AudioBridgeCore
 import AudioBridgeRealtime
 import Foundation
 import Darwin
@@ -39,8 +40,8 @@ final class AUHostContext {
                 let facts = ABAUTransportSnapshot(mapping)
                 if facts.fault != 0 { throw AUError("AU chain could not prepare (OSStatus \(facts.fault)). Check selected plugins and saved settings.") }
                 if facts.ready { ABAUTransportUnlink(mapping); break }
-                if !process.isRunning { throw AUError("AU helper exited while preparing. The plugin may be missing, incompatible or awaiting authorization.") }
-                if ProcessInfo.processInfo.systemUptime > deadline { throw AUError("AU preparation timed out. Routing was not started.") }
+                if !process.isRunning { throw BridgeFailure("AU helper exited while preparing. Stop retries and inspect the plugin if this persists.", kind: .recoverable) }
+                if ProcessInfo.processInfo.systemUptime > deadline { throw BridgeFailure("AU preparation timed out. Routing was not started.", kind: .recoverable) }
                 usleep(10_000)
             }
             lastHeartbeat = ProcessInfo.processInfo.systemUptime
@@ -74,17 +75,17 @@ final class AUHostContext {
             response = reply; self.pending = nil
         }
     }
-    func fault() -> String? {
+    func fault() -> BridgeFailure? {
         pollResponse()
         if let pending, pending.edit == nil, ProcessInfo.processInfo.systemUptime - pendingSince > 30 {
-            return "Live AU update timed out; routing stopped without bypassing the requested chain."
+            return BridgeFailure("Live AU update timed out; routing stopped without bypassing the requested chain.", kind: .actionRequired)
         }
-        guard let transport else { return "AU shared memory is unavailable." }
+        guard let transport else { return BridgeFailure("AU shared memory is unavailable.", kind: .actionRequired) }
         let facts = ABAUTransportSnapshot(transport)
-        if facts.fault != 0 { return "AU render failed (OSStatus \(facts.fault)); routing stopped without bypassing the chain." }
-        if !process.isRunning { return "AU helper exited; routing stopped without bypassing the chain." }
+        if facts.fault != 0 { return BridgeFailure("AU render failed (OSStatus \(facts.fault)); routing stopped without bypassing the chain.", kind: .actionRequired) }
+        if !process.isRunning { return BridgeFailure("AU helper exited; routing stopped without bypassing the chain.", kind: .recoverable) }
         if facts.heartbeat != heartbeat { heartbeat = facts.heartbeat; lastHeartbeat = ProcessInfo.processInfo.systemUptime }
-        if ProcessInfo.processInfo.systemUptime - lastHeartbeat > 2 { return "AU helper stopped responding; routing stopped without bypassing the chain." }
+        if ProcessInfo.processInfo.systemUptime - lastHeartbeat > 2 { return BridgeFailure("AU helper stopped responding; routing stopped without bypassing the chain.", kind: .recoverable) }
         return nil
     }
     func close(releaseMapping: Bool = true) {
