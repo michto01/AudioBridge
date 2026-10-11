@@ -1,0 +1,67 @@
+# Audio Bridge — specification and Codex handoff
+
+Status: **Phase 0 accepted by user testing; Phase 1 discovery and permission UI implemented, hardware/permission acceptance pending. Audio routing is not implemented.**
+
+Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 processes two selected input channels into two selected output channels using a configurable 2×2 matrix. No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
+
+Read documents in this order:
+
+1. [Overview](docs/overview.md) — purpose, decisions, scope and constraints.
+2. [Architecture](docs/architecture.md) — processing, clocks, concurrency and failure modes.
+3. [Design](docs/design.md) — UX, settings and state semantics.
+4. [Plan](docs/plan.md) — staged execution, acceptance gates and deliverables.
+5. [Testing](docs/testing.md) — deterministic and hardware validation.
+6. [Compliance](docs/compliance.md) — Apple permissions, signing, distribution, licences and operational safeguards.
+7. [AGENTS.md](AGENTS.md) — standing implementation instructions for Codex.
+
+## Build strategy
+
+Swift Package Manager (`Package.swift`) is the canonical build definition. A thin `Makefile` invokes `swift build`, `swift test`, and shell scripts for assembling, signing and launching a genuine `.app` bundle. No `.xcodeproj` is required. Xcode/Apple SDK tooling must be installed on the target Mac (Swift 5.9+ and a macOS 14+ SDK).
+
+```sh
+make doctor
+make build
+make test
+make app
+make sign
+make verify
+make run
+make release
+make clean
+```
+
+The app has a native menu-bar popover and separate settings scene. Phase 1 discovers real Core Audio devices, persists explicitly selected UIDs and physical channels, observes device/property changes and provides a microphone permission button. Start is disabled and meters are unavailable. No capture, login registration or routing occurs. Closing settings does not quit the app; use Quit in the popover.
+
+Run the current build with `make DIST_DIR=/tmp/AudioBridge-phase1 run`. In Settings → Audio, choose both endpoints and both physical lanes explicitly. Choosing the same physical channel twice explicitly configures mono duplication for a future engine. Device selection never changes macOS default devices or sample rates. A missing endpoint or invalidated channel selection stays saved and is shown as unavailable.
+
+Settings → Diagnostics shows actual stream formats and property errors and exports a JSON report including permission context. `make probe` runs the same read-only catalog as a CLI. CLI microphone authorization is **not evidence of packaged-app authorization**; request/check permission in Settings → Audio. Raw local diagnostic snapshots under `.diagnostics/` are ignored by Git and contain no audio samples.
+
+Artifacts normally go to `dist/AudioBridge.app`. `make run` packages and ad-hoc signs before launching. `make release` builds the release configuration, signs, verifies and creates a ZIP with a SHA-256 checksum. Ad-hoc signing does not provide Developer ID trust or notarization. `make clean` clears SwiftPM build products and retains distribution artifacts for review.
+
+File Provider storage on the development machine attaches Finder metadata that can invalidate bundle signing. Use local output storage for reliable packaging, for example `make DIST_DIR=/tmp/AudioBridge-phase0 run` and `make DIST_DIR=/tmp/AudioBridge-phase0 release`. Temporary artifacts are disposable, not a stable deployment path. Tests automatically use isolated temporary build storage and remove it afterward. Packaging refuses to replace a bundle with another identifier or a symlink. There are no third-party dependencies, extra entitlements or embedded resources in Phase 0.
+
+See [Phase 0 results](docs/phase-0-results.md) and [Phase 1 results](docs/phase-1-results.md) for actual checks and remaining acceptance steps.
+
+## Decisions already locked
+
+- Launch at login; automatically route when configured devices are present.
+- Bind input and output by stable Core Audio device UID; **never silently fall back** to another device.
+- 2×2 configurable amplitude mixing matrix; stereo identity preset by default.
+- Silence is metered but **never generates silence notifications**.
+- Menu-bar popover for monitoring; separate settings window.
+- Retry recoverable failures indefinitely with capped backoff; deliberate Stop always wins.
+- Preferred processing rate 48 kHz; negotiate actual hardware formats safely.
+- Initial release is a login-session app, not a system daemon.
+
+## Important unknowns to validate on hardware
+
+- Actual Core Audio capabilities, channel layouts, supported formats, and UID behavior across representative devices and reconnects.
+- Whether the built-in headphone output exposes expected stereo format and volume control.
+- Whether HAL device I/O APIs chosen support the required independent device configuration on macOS 14+.
+- Actual latency, drift, glitches, and sample-rate behavior across representative independent devices; analog destination calibration belongs to the deployment scenario.
+
+See [Plan](docs/plan.md) for the mandatory device-probe milestone before finalizing the backend.
+
+## Device independence
+
+See [`docs/device-compatibility.md`](docs/device-compatibility.md) and [`docs/decisions/ADR-001-universal-core-audio.md`](docs/decisions/ADR-001-universal-core-audio.md). TightAV/ATEM is an example deployment only.
