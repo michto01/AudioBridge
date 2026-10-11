@@ -67,7 +67,6 @@ final class Renderer: @unchecked Sendable {
     let second: UnsafeMutablePointer<Float>
     let list: UnsafeMutableAudioBufferListPointer
     var stages: [Stage] = []
-    var sampleTime: Double = 0
     var latencySeconds: Float = 0
     var idleMicroseconds: UInt32 = 1000
 
@@ -110,6 +109,17 @@ final class Renderer: @unchecked Sendable {
             try unit.outputBusses[0].setFormat(format)
             unit.maximumFramesToRender = frames
             unit.isRenderingOffline = false
+            // Native AUv2 editors can query this through the host callback bridge.
+            // Capture only the mapping, which outlives every stage; no renderer cycle.
+            let transport = self.transport
+            unit.transportStateBlock = { flags, position, cycleStart, cycleEnd in
+                let state = ABAUTransportSnapshot(transport)
+                flags?.pointee = state.ready && !state.stopped && state.fault == 0 ? .moving : []
+                position?.pointee = Double(state.processedFrames)
+                cycleStart?.pointee = 0
+                cycleEnd?.pointee = 0
+                return true
+            }
             let stage = Stage(effect: effect, wrapper: wrapper, input: first, frames: frames)
             try unit.allocateRenderResources()
             stages.append(stage)
@@ -130,7 +140,9 @@ final class Renderer: @unchecked Sendable {
             guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second
-            var timestamp = AudioTimeStamp(); timestamp.mSampleTime = sampleTime; timestamp.mFlags = .sampleTimeValid
+            var timestamp = AudioTimeStamp()
+            timestamp.mSampleTime = Double(ABAUTransportSnapshot(transport).processedFrames)
+            timestamp.mFlags = .sampleTimeValid
             for stage in stages {
                 stage.pull.samples = input
                 for lane in 0..<2 {
@@ -154,7 +166,6 @@ final class Renderer: @unchecked Sendable {
                 if !bypass { scratch[i * 2] = a; scratch[i * 2 + 1] = b }
             }
             guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
-            sampleTime += Double(frames)
         }
         return true
     }

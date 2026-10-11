@@ -596,6 +596,7 @@ final class AppModel: ObservableObject {
         }
         lines.append("Input matrix: " + selection.inputMix.map { "ch\($0.channel) → L \($0.left), R \($0.right)" }.joined(separator: "; "))
         lines.append("Output map: " + selection.outputMap.map { "ch\($0.channel) ← \($0.source.label)" }.joined(separator: "; "))
+        lines.append("Linked input trim: \(inputTrim) dB; output gain: \(outputGain) dB")
         lines.append("AU chain bypassed: \(chainBypassed); effects: " + auChain.effects.map { "\($0.name) [\($0.enabled ? "enabled" : "disabled")]" }.joined(separator: " → "))
         if let s = engineSnapshot {
             lines += ["Input/output callbacks: \(s.inputCallbacks) / \(s.outputCallbacks)",

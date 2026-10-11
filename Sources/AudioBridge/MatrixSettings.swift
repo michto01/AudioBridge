@@ -29,12 +29,14 @@ struct MatrixSettings: View {
                         }
                     }.frame(height: gridHeight(inputChannels.count))
                     missing(.input, channels: inputChannels)
-                    Text("Click to patch. Right-click a cell for gain. Presets use the first physical channel(s) shown.")
+                    Text("Click to patch; use each cell’s slider button to reduce that source’s contribution to Mix L or Mix R. 1 = unity, 0 = off. Presets use the first physical channel(s) shown.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(4)
             }
-            Label("Stereo mix → AU effects → drift compensation → output gain", systemImage: "arrow.down")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Mix L / Mix R → input trim → AU effects → drift → output gain", systemImage: "arrow.down")
+                Text("The same Mix L / Mix R buses below, after processing. Copies go to the physical outputs you patch.")
+            }.font(.caption).foregroundStyle(.secondary)
             GroupBox("Output patch · \(model.device(.output)?.name ?? "Choose an output device")") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -42,7 +44,7 @@ struct MatrixSettings: View {
                         Spacer()
                         Button("Clear") { model.clearPatches(.output) }
                     }
-                    headers("Physical output", "Out L", "Out R")
+                    headers("Physical output", "Mix L", "Mix R")
                     ScrollView {
                         LazyVStack(spacing: 4) {
                             ForEach(outputChannels, id: \.self) { channel in
@@ -102,19 +104,24 @@ private struct RoutingCell: View {
     let set: (Double) -> Void
     @State private var editing = false
     var body: some View {
+        HStack(spacing: 2) {
         Button { set(gain > 0 ? 0 : 1) } label: {
             HStack(spacing: 4) {
                 Image(systemName: gain > 0 ? "checkmark.circle.fill" : "circle")
                 if gain > 0 { Text(gain.formatted(.number.precision(.fractionLength(2)))).monospacedDigit() }
-            }.foregroundStyle(gain > 0 ? Color.accentColor : Color.secondary).frame(width: 76, height: 24)
+            }.foregroundStyle(gain > 0 ? Color.accentColor : Color.secondary).frame(width: 50, height: 24)
         }.buttonStyle(.bordered)
             .accessibilityLabel(title).accessibilityValue(gain > 0 ? "Connected, gain \(gain)" : "Disconnected")
             .contextMenu { Button("Adjust gain…") { editing = true } }
+        Button { editing = true } label: { Image(systemName: "slider.horizontal.3").frame(height: 24) }
+            .buttonStyle(.borderless).accessibilityLabel("Adjust \(title) gain")
+            .help("Adjust source contribution, including attenuation")
+        }.frame(width: 92)
             .popover(isPresented: $editing) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(title).font(.headline)
                     Slider(value: Binding(get: { gain }, set: set), in: 0...2, step: 0.01)
-                    TextField("Linear gain", value: Binding(get: { gain }, set: set), format: .number)
+                    GainEntry(value: Binding(get: { gain }, set: set), range: 0...2)
                     Text("1 = unity. Above 1 boosts and can clip. Changes ramp over 20 ms.").font(.caption)
                 }.padding().frame(width: 280)
             }

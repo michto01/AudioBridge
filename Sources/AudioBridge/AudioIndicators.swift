@@ -15,7 +15,7 @@ struct SignalMeters: View {
                 let level = levels?[lane]
                 let db = level?.decibels ?? -.infinity
                 HStack(spacing: 8) {
-                    Text("\(direction == .input ? "Mix" : "Out") \(lane == 0 ? "L" : "R")")
+                    Text("Mix \(lane == 0 ? "L" : "R")")
                         .font(.caption).frame(width: 44, alignment: .leading)
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
@@ -85,8 +85,12 @@ struct BufferSettings: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 4)
                 }
+                if model.selectedBufferFrames < 256 {
+                    Label("Small bridge fill leaves little AU scheduling margin. If glitches increase, stop and try 256 or 512 frames here; device buffers are separate.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 if model.routingRequested, let metrics = model.engineSnapshot {
-                    Text("Drift correction: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm · rebuffers \(metrics.rebufferEvents) · recentered \(metrics.recenterFrames) frames")
+                    Text("Drift command: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm · rebuffers \(metrics.rebufferEvents) · recentered \(metrics.recenterFrames) frames")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Text("\(metrics.bufferedFrames) / \(metrics.capacity) frames · \(metrics.primed ? "Ready" : "Filling") · underrun \(metrics.underrunFrames) · overrun \(metrics.overrunFrames)")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -108,13 +112,37 @@ struct GainControl: View {
             Text(direction == .input ? "Input trim" : "Output gain").font(.caption).frame(width: 80, alignment: .leading)
             Slider(value: binding, in: GainSettings.range, step: 0.5)
                 .accessibilityLabel(direction == .input ? "Input trim in decibels" : "Output gain in decibels")
-            TextField("dB", value: binding, format: .number.precision(.fractionLength(1)))
-                .textFieldStyle(.roundedBorder).frame(width: 65)
+            GainEntry(value: binding, range: GainSettings.range)
+                .frame(width: 65)
                 .accessibilityLabel("Exact gain in decibels")
             Text("dB").font(.caption)
             Button { model.setGain(0, direction: direction) } label: { Image(systemName: "arrow.uturn.backward") }
                 .help("Reset to 0 dB")
         }
         .help("Digital gain, −60 to +12 dB. Both stereo channels change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged.")
+    }
+}
+
+/// Keep incomplete edits (notably a leading minus) away from the live model.
+struct GainEntry: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+    var body: some View {
+        TextField("Gain", text: $draft)
+            .textFieldStyle(.roundedBorder).focused($focused)
+            .onAppear { refresh() }
+            .onChange(of: value) { _, _ in if !focused { refresh() } }
+            .onChange(of: focused) { _, active in if !active { commit() } }
+            .onSubmit { commit(); focused = false }
+            .help("Enter a value, then press Return or leave the field to apply.")
+    }
+    private func refresh() { draft = value.formatted(.number.grouping(.never).precision(.fractionLength(2))) }
+    private func commit() {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        if let parsed = formatter.number(from: draft)?.doubleValue, parsed.isFinite, range.contains(parsed) { value = parsed }
+        refresh()
     }
 }
