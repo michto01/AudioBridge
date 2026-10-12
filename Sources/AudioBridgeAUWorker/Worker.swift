@@ -45,16 +45,40 @@ private struct LatencySignal: @unchecked Sendable {
 final class PullSource {
     var samples: UnsafeMutablePointer<Float>
     let frames: UInt32
+    var sampleTime: Double = 0
     init(samples: UnsafeMutablePointer<Float>, frames: UInt32) { self.samples = samples; self.frames = frames }
-    lazy var block: AURenderPullInputBlock = { [unowned self] _, _, frames, bus, data in
-        guard bus == 0, frames == self.frames, data.pointee.mNumberBuffers == 2 else { return kAudioUnitErr_FormatNotSupported }
+    lazy var block: AURenderPullInputBlock = { [unowned self] _, timestamp, frames, bus, data in
+        guard bus == 0, data.pointee.mNumberBuffers == 2 else { return kAudioUnitErr_FormatNotSupported }
+        guard frames <= self.frames else { return kAudioUnitErr_TooManyFramesToProcess }
+        // A unit may pull portions of this render cycle, or pull the same
+        // portion again. Address by sample time rather than a consuming cursor.
+        // All reads must stay inside the prepared block; no live FIFO access.
+        let offset: Int
+        if timestamp.pointee.mFlags.contains(.sampleTimeValid) {
+            let delta = timestamp.pointee.mSampleTime - self.sampleTime
+            guard delta.isFinite, delta >= 0, delta <= Double(self.frames - frames),
+                  delta == delta.rounded(.towardZero) else { return kAudioUnitErr_InvalidParameter }
+            offset = Int(delta)
+        } else {
+            // Legacy full-block pulls can omit sample time. A partial pull
+            // without an address is ambiguous and must not replay wrong audio.
+            guard frames == self.frames else { return kAudioUnitErr_InvalidParameter }
+            offset = 0
+        }
         let buffers = UnsafeMutableAudioBufferListPointer(data)
         let bytes = Int(frames) * MemoryLayout<Float>.size
         for lane in 0..<2 {
-            let source = self.samples.advanced(by: lane * Int(self.frames))
+            guard buffers[lane].mNumberChannels == 1 else { return kAudioUnitErr_FormatNotSupported }
+            if buffers[lane].mData != nil, buffers[lane].mDataByteSize < bytes {
+                return kAudioUnitErr_TooManyFramesToProcess
+            }
+        }
+        for lane in 0..<2 {
+            let source = self.samples.advanced(by: lane * Int(self.frames) + offset)
             if let destination = buffers[lane].mData {
-                guard buffers[lane].mDataByteSize >= bytes else { return kAudioUnitErr_TooManyFramesToProcess }
-                memcpy(destination, source, bytes)
+                // Some units retain a previously supplied source pointer.
+                // Overlapping source/destination is legal in that case.
+                memmove(destination, source, bytes)
             } else { buffers[lane].mData = UnsafeMutableRawPointer(source) }
             buffers[lane].mNumberChannels = 1; buffers[lane].mDataByteSize = UInt32(bytes)
         }
@@ -186,6 +210,7 @@ final class Renderer: @unchecked Sendable {
             for index in stages.indices {
                 let stage = stages[index]
                 stage.pull.samples = input
+                stage.pull.sampleTime = timestamp.mSampleTime
                 for lane in 0..<2 {
                     list[lane] = AudioBuffer(mNumberChannels: 1, mDataByteSize: bytes, mData: output.advanced(by: lane * count))
                     memset(list[lane].mData, 0, Int(bytes))

@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.6.0/build 33 is the audio reliability revision: pre-teardown reporting and callback lifetime fixes, asynchronous AU audio workgroups, notification-driven plugin latency reads, per-plugin timing and starvation evidence, explicit AU blocks, and device-loss stop/re-arm protection. Simple/Expert audio setup and Czech/English operator interfaces are included. See [0.6 results and pending acceptance](docs/release-0.6-results.md). Low-latency, plugin and 12-hour operational gates remain unrun.**
+Status: **0.6.1/build 34 adds bounded, timestamp-addressed AU input pulls to the 0.6 audio reliability revision. See [AU pull correction](docs/au-input-pull-results.md) and [0.6 results and pending acceptance](docs/release-0.6-results.md) for callback lifetime fixes, asynchronous AU workgroups, plugin/starvation telemetry and device-loss stop/re-arm protection. Simple/Expert audio setup and Czech/English operator interfaces are included. Low-latency, plugin and 12-hour operational gates remain unrun.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 

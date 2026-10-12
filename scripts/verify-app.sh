@@ -14,8 +14,8 @@ check CFBundleExecutable AudioBridge
 check CFBundlePackageType APPL
 check LSMinimumSystemVersion 14.0
 check LSUIElement true
-check CFBundleShortVersionString 0.6.0
-check CFBundleVersion 33
+check CFBundleShortVersionString 0.6.1
+check CFBundleVersion 34
 check CFBundleIconFile AudioBridge.icns
 [[ -s "$APP/Contents/Resources/AudioBridge.icns" ]]
 for LANGUAGE in en cs; do
