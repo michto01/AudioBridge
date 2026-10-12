@@ -47,7 +47,7 @@ Digital output gain: provisional -60 to +12 dB; 0 dB default; smooth changes. Di
 
 ## Status vocabulary
 
-Settings tabs: **Playback** (play icon) holds Start/Stop, stereo meters/linked gains and delay/processing telemetry; **Audio** holds UID device selection, current driver buffers, bridge fill and permission; **Routing** holds patch grids; **Effects** holds AU catalog/chain/editor controls. General, Diagnostics and About remain separate. Menu-bar quick controls remain available. The full-chain delay display explicitly distinguishes an estimated allowance from loopback measurement, retains Unknown device reports, and separates AU processing wall time from reported signal latency. Interface buffer drafts begin with the real current driver value, otherwise 128 frames clamped to a valid reported range; changes require explicit Apply while stopped.
+Settings tabs: **Bridge** (waveform icon) holds the single two-state Start/Stop control, stereo meters/linked gains and delay/processing telemetry; **Audio** holds UID device selection, current driver buffers, bridge fill and permission; **Routing** holds patch grids; **Effects** holds AU catalog/chain/editor controls. General, Diagnostics and About remain separate. Menu-bar quick controls remain available. The full-chain delay display explicitly distinguishes an estimated allowance from loopback measurement, retains Unknown device reports, and separates AU processing wall time from reported signal latency. Interface buffer drafts begin with the real current driver value, otherwise 128 frames clamped to a valid reported range; changes require explicit Apply while stopped.
 
 - **Stopped** — operator disabled routing; no retry.
 - **Waiting for input/output** — selected UID missing; automatic retry active.
@@ -65,6 +65,6 @@ On first launch, ask user to choose input and output; do not auto-select a poten
 
 ## Accessibility and interaction
 
-Diagnostics contains a “Show debug information in the interface” toggle, disabled at each launch. Playback and Audio hide technical runtime counters, queue/timing detail and detailed delay accounting until enabled. Normal meters, status, actionable faults, buffer configuration and a compact delay estimate stay available. Diagnostics, Copy status and export retain full information independently of this display choice.
+Diagnostics contains a “Show debug information in the interface” toggle, disabled at each launch. Bridge and Audio hide technical runtime counters, queue/timing detail and detailed delay accounting until enabled. Normal meters, status, actionable faults, buffer configuration and a compact delay estimate stay available. Diagnostics, Copy status and export retain full information independently of this display choice.
 
 All controls keyboard accessible with VoiceOver labels. Preserve menu-bar status while settings window closes. Provide a status text alternative to icon color. Show reconnect progress without blocking the UI. Do not provide a fake green success status before audio callbacks have started and health is confirmed.

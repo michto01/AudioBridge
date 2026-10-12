@@ -102,7 +102,7 @@ struct BufferSettings: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text("Refill waits for this reserve plus one output callback and required FIR lookahead. Actual queue delay is shown in Playback.")
+                Text("Refill waits for this reserve plus one output callback and required FIR lookahead. Actual queue delay is shown in Bridge.")
                     .font(.caption).foregroundStyle(.secondary)
                 }
                 DisclosureGroup("Expert", isExpanded: $expert) {

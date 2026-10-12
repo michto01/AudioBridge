@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.5.0/build 20 adds a refreshed Playback dashboard, animated metering, and opt-in HTTP/OSC status and control for local production networks. Automated tests and live audio/network acceptance remain unrun.**
+Status: **0.5.0/build 21 adds a refreshed Bridge dashboard, animated metering, a single stateful Start/Stop button, and opt-in HTTP/OSC status and control for local production networks. Automated tests and live audio/network acceptance remain unrun.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 
@@ -62,7 +62,7 @@ See [Phase 0 results](docs/phase-0-results.md), [Phase 1 results](docs/phase-1-r
 
 ## Installed Audio Unit effects
 
-Settings → Playback contains Start/Stop, input trim/output gain above their meters, and a delay/processing breakdown. The menu popover retains quick controls. Settings → Audio configures devices, current driver buffer values, bridge fill and permission. Settings → Effects lists installed AU effects. Add, reorder, enable or remove up to eight slots while routing; the helper prepares a replacement chain alongside the current one and switches between processing blocks. Close an editor before changing the chain. Preparation failures stop routing, preserving explicit device selection. Switching resets plugin histories/tails and is not guaranteed click-free or latency-matched.
+Settings → Bridge contains the single Start/Stop button, input trim/output gain beside their meters, and a delay/processing breakdown. The menu popover retains the same two-state control. Settings → Audio configures devices, current driver buffer values, bridge fill and permission. Settings → Effects lists installed AU effects. Add, reorder, enable or remove up to eight slots while routing; the helper prepares a replacement chain alongside the current one and switches between processing blocks. Close an editor before changing the chain. Preparation failures stop routing, preserving explicit device selection. Switching resets plugin histories/tails and is not guaranteed click-free or latency-matched.
 
 Playback delay adds reported input/output device and routed-stream latency, safety offsets, callback buffer allowances, observed capture/processed queues and in-flight AU block, FIR lookahead and declared AU signal latency. Missing values remain Unknown; startup fill and processing wall time are not added twice. The displayed chain allowance is an **estimate**, not measured physical end-to-end latency. AU last/mean/max block wall time is separate performance telemetry, including scheduling/preemption; queue min/max is sampled while primed. Copy status includes the components. Interface controls read the device's existing value; when it is unavailable the draft fallback is 128 frames within the reported range, with no automatic hardware write. See [Playback/delay results](docs/playback-delay-results.md).
 

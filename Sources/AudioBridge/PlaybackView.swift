@@ -39,10 +39,7 @@ struct PlaybackView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 HStack {
-                    Button { model.startRouting() } label: { Label("Start", systemImage: "play.fill") }
-                        .disabled(!model.canStartRouting)
-                    Button { model.stopRouting() } label: { Label("Stop", systemImage: "stop.fill") }
-                        .disabled(!model.canStopRouting)
+                    RoutingToggleButton(model: model)
                     Spacer()
                     Button("Copy status") { model.copyStatus() }
                 }
@@ -55,6 +52,21 @@ struct PlaybackView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
+    }
+}
+
+struct RoutingToggleButton: View {
+    @ObservedObject var model: AppModel
+    private var stopping: Bool { model.canStopRouting }
+    var body: some View {
+        Button {
+            if stopping { model.stopRouting() } else { model.startRouting() }
+        } label: {
+            Label(stopping ? "Stop" : "Start", systemImage: stopping ? "stop.fill" : "play.fill")
+        }
+        .disabled(!stopping && !model.canStartRouting)
+        .tint(stopping ? .red : .accentColor)
+        .buttonStyle(.borderedProminent)
     }
 }
 

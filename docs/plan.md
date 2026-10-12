@@ -86,7 +86,7 @@ Current implementation: local Phase 5 tooling begins with macOS 14 CI (`make doc
 
 **Gate:** 12-hour continuous run, no unhandled crashes, bounded buffer occupancy and documented recovery results. Note any remaining measurable dropouts or latency.
 
-User-authorized operator-interface follow-up: 0.5.0/build 20 refreshes the Playback dashboard, smooths visible meter motion, and adds opt-in OSC/HTTP status and control for Bitfocus Companion. See [UI/remote control results](ui-remote-control-results.md) and [protocol contract](remote-control.md). Build and signed bundle checks pass; network/Companion/UI visual acceptance and Phase 5 operational gates remain pending.
+User-authorized operator-interface follow-up: 0.5.0/build 21 refreshes the Bridge dashboard, smooths visible meter motion, uses one two-state Start/Stop button, and adds opt-in OSC/HTTP status and control for Bitfocus Companion. See [UI/remote control results](ui-remote-control-results.md) and [protocol contract](remote-control.md). Build and signed bundle checks pass; network/Companion/UI visual acceptance and Phase 5 operational gates remain pending.
 
 ## Suggested release milestones
 

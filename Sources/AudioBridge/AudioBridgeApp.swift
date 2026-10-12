@@ -27,8 +27,7 @@ struct AudioBridgeApp: App {
                 if let issue = model.outputIssue { Text(issue).font(.caption) }
                 if !model.routingRequested, let reason = model.startUnavailableReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
                 HStack {
-                    Button("Start") { model.startRouting() }.disabled(!model.canStartRouting)
-                    Button("Stop") { model.stopRouting() }.disabled(!model.canStopRouting)
+                    RoutingToggleButton(model: model)
                     FocusSettingsButton()
                     Button("Quit") { model.quit() }
                 }
@@ -113,7 +112,7 @@ private struct SettingsView: View {
     var body: some View {
         TabView {
             PlaybackView(model: model)
-                .tabItem { Label("Playback", systemImage: "play.circle") }
+                .tabItem { Label("Bridge", systemImage: "waveform") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error = model.error { Text(error).foregroundStyle(.red) }
@@ -142,7 +141,7 @@ private struct SettingsView: View {
             }.tabItem { Label("Audio", systemImage: "waveform") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Patches and cell gains can change live. Start/Stop is in Playback.").font(.caption).foregroundStyle(.secondary)
+                    Text("Patches and cell gains can change live. Start/Stop is in Bridge.").font(.caption).foregroundStyle(.secondary)
                     MatrixSettings(model: model)
                 }.padding()
             }.tabItem { Label("Routing", systemImage: "point.3.connected.trianglepath.dotted") }
@@ -164,7 +163,7 @@ private struct SettingsView: View {
                         }
                     }
                     Toggle("Show debug information in the interface", isOn: $model.showDebugInformation)
-                    Text("Shows live queue, drift, AU timing and detailed delay readouts in Playback and Audio. Off by default at launch; diagnostic reports always include full details.")
+                    Text("Shows live queue, drift, AU timing and detailed delay readouts in Bridge and Audio. Off by default at launch; diagnostic reports always include full details.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development") · bundle: \(Bundle.main.bundlePath)")
                         .font(.caption)
