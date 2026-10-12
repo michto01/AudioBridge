@@ -54,6 +54,11 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output,
 bool ABEngineAttachRouting(ABEngine *engine, ABRouting *routing);
 bool ABEngineSetRouting(ABEngine *engine, const float *input, uint32_t inputCount, const float *output, uint32_t outputCount);
 OSStatus ABEngineStart(ABEngine *engine);
+void ABEngineSetExclusiveAccessRequested(ABEngine *engine, bool requested);
+// Bit 0 = input device held; bit 1 = output device held.
+uint32_t ABEngineExclusiveAccessMask(const ABEngine *engine);
+// 1 = input, 2 = output, 0 = not an exclusive-access failure.
+uint32_t ABEngineExclusiveFailureDevice(const ABEngine *engine);
 // Borrowed mapping stays alive until callback teardown succeeds.
 bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport);
 // Initial gain is configured only before callback registration; live updates are atomic.

@@ -88,6 +88,8 @@ Current implementation: local Phase 5 tooling begins with macOS 14 CI (`make doc
 
 User-authorized operator-interface follow-up: 0.5.0/build 21 refreshes the Bridge dashboard, smooths visible meter motion, uses one two-state Start/Stop button, and adds opt-in OSC/HTTP status and control for Bitfocus Companion. See [UI/remote control results](ui-remote-control-results.md) and [protocol contract](remote-control.md). Build and signed bundle checks pass; network/Companion/UI visual acceptance and Phase 5 operational gates remain pending.
 
+User-authorized device-access follow-up: 0.5.0/build 22 adds an opt-in request for Core Audio hog mode on both selected endpoints. The C engine acquires before IOProc registration, rolls back partial ownership, confirms device ownership and releases after safe callback teardown. Unsupported or busy devices block Start with an actionable device-specific reason; shared access remains selectable. See [exclusive access results](exclusive-access-results.md). Build and bundle checks are recorded there; testing with competing apps and multiple device drivers remains pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

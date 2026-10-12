@@ -97,6 +97,8 @@ struct ABEngine {
     float *inputScratch, *outputScratch;
     uint32_t scratchFrames, prefill;
     bool inputStarted, outputStarted;
+    bool exclusiveRequested, inputHogHeld, outputHogHeld;
+    uint32_t exclusiveFailureDevice;
     _Atomic bool enabled, primed;
     _Atomic uint32_t inFlight;
     _Atomic uint64_t inputCallbacks, outputCallbacks, inputFrames, outputFrames;
@@ -335,7 +337,51 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
 }
 OSStatus ABEngineStart(ABEngine *engine) {
     if (!engine || !engine->routing || engine->inputProc || engine->outputProc) return kAudioHardwareIllegalOperationError;
-    OSStatus status = AudioDeviceCreateIOProcID(engine->inputDevice, input_callback, engine, &engine->inputProc);
+    OSStatus status = noErr;
+    engine->exclusiveFailureDevice = 0;
+    if (engine->exclusiveRequested) {
+        AudioObjectPropertyAddress address = { kAudioDevicePropertyHogMode, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        AudioDeviceID devices[] = { engine->inputDevice, engine->outputDevice };
+        bool *held[] = { &engine->inputHogHeld, &engine->outputHogHeld };
+        for (uint32_t i = 0; i < 2; ++i) {
+            pid_t owner = -1; UInt32 size = sizeof(owner);
+            if (!AudioObjectHasProperty(devices[i], &address)
+                || AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner) != noErr) {
+                status = kAudioHardwareUnsupportedOperationError; engine->exclusiveFailureDevice = i + 1; break;
+            }
+            if (owner == getpid()) { *held[i] = true; continue; }
+            if (owner != -1) { status = kAudioHardwareIllegalOperationError; engine->exclusiveFailureDevice = i + 1; break; }
+            Boolean settable = false;
+            if (AudioObjectIsPropertySettable(devices[i], &address, &settable) != noErr || !settable) {
+                status = kAudioHardwareUnsupportedOperationError; engine->exclusiveFailureDevice = i + 1; break;
+            }
+            // Hog mode is a toggle; read back the owner instead of assuming success.
+            status = AudioObjectSetPropertyData(devices[i], &address, 0, NULL, sizeof(owner), &owner);
+            if (status == noErr) { size = sizeof(owner); status = AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner); }
+            if (status != noErr || owner != getpid()) {
+                if (status == noErr) status = kAudioHardwareIllegalOperationError;
+                engine->exclusiveFailureDevice = i + 1; break;
+            }
+            *held[i] = true;
+        }
+        if (status != noErr) {
+            for (int i = 1; i >= 0; --i) {
+                if (!*held[i]) continue;
+                pid_t owner = -1; UInt32 size = sizeof(owner);
+                if (AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner) != noErr || owner != getpid()) {
+                    *held[i] = false;
+                    continue;
+                }
+                if (AudioObjectSetPropertyData(devices[i], &address, 0, NULL, sizeof(owner), &owner) == noErr) {
+                    size = sizeof(owner);
+                    if (AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner) == noErr && owner != getpid())
+                        *held[i] = false;
+                }
+            }
+            return status;
+        }
+    }
+    status = AudioDeviceCreateIOProcID(engine->inputDevice, input_callback, engine, &engine->inputProc);
     if (status != noErr) return status;
     status = AudioDeviceCreateIOProcID(engine->outputDevice, output_callback, engine, &engine->outputProc);
     if (status != noErr) return status;
@@ -347,6 +393,16 @@ OSStatus ABEngineStart(ABEngine *engine) {
     if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
     engine->outputStarted = true;
     return noErr;
+}
+void ABEngineSetExclusiveAccessRequested(ABEngine *engine, bool requested) {
+    if (engine && !engine->inputProc && !engine->outputProc) engine->exclusiveRequested = requested;
+}
+uint32_t ABEngineExclusiveAccessMask(const ABEngine *engine) {
+    if (!engine) return 0;
+    return (engine->inputHogHeld ? 1u : 0u) | (engine->outputHogHeld ? 2u : 0u);
+}
+uint32_t ABEngineExclusiveFailureDevice(const ABEngine *engine) {
+    return engine ? engine->exclusiveFailureDevice : 0;
 }
 OSStatus ABEngineStop(ABEngine *engine) {
     if (!engine) return noErr;
@@ -371,13 +427,34 @@ OSStatus ABEngineStop(ABEngine *engine) {
         for (int i = 0; i < 1000 && atomic_load_explicit(&engine->inFlight, memory_order_acquire); ++i) usleep(1000);
         if (atomic_load_explicit(&engine->inFlight, memory_order_acquire) && first == noErr)
             first = kAudioHardwareUnspecifiedError;
+        if (!atomic_load_explicit(&engine->inFlight, memory_order_acquire)) {
+            AudioObjectPropertyAddress address = { kAudioDevicePropertyHogMode, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+            AudioDeviceID devices[] = { engine->inputDevice, engine->outputDevice };
+            bool *held[] = { &engine->inputHogHeld, &engine->outputHogHeld };
+            for (int i = 1; i >= 0; --i) {
+                if (!*held[i]) continue;
+                pid_t owner = -1; UInt32 size = sizeof(owner);
+                OSStatus status = AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner);
+                if (status == noErr && owner == getpid()) {
+                    status = AudioObjectSetPropertyData(devices[i], &address, 0, NULL, sizeof(owner), &owner);
+                    if (status == noErr) {
+                        size = sizeof(owner);
+                        status = AudioObjectGetPropertyData(devices[i], &address, 0, NULL, &size, &owner);
+                        if (status == noErr && owner == getpid()) status = kAudioHardwareIllegalOperationError;
+                    }
+                }
+                if (status == noErr) *held[i] = false;
+                else if (first == noErr) first = status;
+            }
+        }
     }
     return first;
 }
 bool ABEngineDestroy(ABEngine *engine) {
     if (!engine) return true;
     (void)ABEngineStop(engine);
-    if (engine->inputProc || engine->outputProc || atomic_load_explicit(&engine->inFlight, memory_order_acquire))
+    if (engine->inputProc || engine->outputProc || engine->inputHogHeld || engine->outputHogHeld
+        || atomic_load_explicit(&engine->inFlight, memory_order_acquire))
         return false; // Keep callbacks context alive on failed unregister/teardown.
     ABRingDestroy(engine->ring); ABResamplerDestroy(engine->resampler); ABRoutingDestroy(engine->routing); free(engine->inputScratch); free(engine->outputScratch); free(engine);
     return true;

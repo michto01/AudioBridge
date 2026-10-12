@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastRecoveryFault: String?
     @Published private(set) var recoveryHistory: [String] = []
     @Published private(set) var resumeAtLaunch = false
+    @Published private(set) var exclusiveAccessEnabled = false
     @Published private(set) var restartRequired = false
     private var retryWork: DispatchWorkItem?
     private var quitting = false
@@ -92,6 +93,7 @@ final class AppModel: ObservableObject {
     init() {
         let preferences = UserDefaults.standard
         resumeAtLaunch = preferences.bool(forKey: "AudioBridge.resumeAtLaunch")
+        exclusiveAccessEnabled = preferences.bool(forKey: "AudioBridge.exclusiveAccess")
         manuallyStopped = preferences.object(forKey: "AudioBridge.desiredRouting") as? Bool == false
         if let data = preferences.data(forKey: "AudioBridge.auCatalogCache"), data.count <= 8 * 1024 * 1024 {
             do {
@@ -280,7 +282,8 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed, updated: { [weak self] snapshot in
+                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed,
+                     exclusiveAccess: exclusiveAccessEnabled, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
@@ -413,6 +416,11 @@ final class AppModel: ObservableObject {
         // Enabling this preference never overrides a deliberate Stop.
         resumeAtLaunch = enabled
         UserDefaults.standard.set(enabled, forKey: "AudioBridge.resumeAtLaunch")
+    }
+    func setExclusiveAccessEnabled(_ enabled: Bool) {
+        guard canEditSelections else { return }
+        exclusiveAccessEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "AudioBridge.exclusiveAccess")
     }
     func setBufferProfile(_ profile: BufferProfile) {
         guard canEditSelections else { return }
@@ -755,6 +763,8 @@ final class AppModel: ObservableObject {
         lines.append("Input matrix: " + selection.inputMix.map { "ch\($0.channel) → L \($0.left), R \($0.right)" }.joined(separator: "; "))
         lines.append("Output map: " + selection.outputMap.map { "ch\($0.channel) ← \($0.source.label)" }.joined(separator: "; "))
         lines.append("Linked input trim: \(inputTrim) dB; output gain: \(outputGain) dB")
+        let hogMask = engineSnapshot?.exclusiveAccessMask ?? 0
+        lines.append("Exclusive access requested: \(exclusiveAccessEnabled); input held: \((hogMask & 1) != 0); output held: \((hogMask & 2) != 0)")
         lines.append("AU chain bypassed: \(chainBypassed); effects: " + auChain.effects.map { "\($0.name) [\($0.enabled ? "enabled" : "disabled")]" }.joined(separator: " → "))
         if let s = engineSnapshot {
             lines += ["Input/output callbacks: \(s.inputCallbacks) / \(s.outputCallbacks)",

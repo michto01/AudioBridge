@@ -118,6 +118,18 @@ private struct SettingsView: View {
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     endpointPicker(.input)
                     endpointPicker(.output)
+                    GroupBox("Device access") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Request exclusive device access while routing", isOn: Binding(
+                                get: { model.exclusiveAccessEnabled },
+                                set: { model.setExclusiveAccessEnabled($0) }
+                            )).disabled(!model.canEditSelections)
+                            Text("Prevents most other audio apps from using the selected input and output while Audio Bridge is running. Some devices do not support exclusive access; Start will report if either request fails.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Status: \(model.routingRequested ? (model.routingTransitioning ? "Acquiring…" : (model.exclusiveAccessEnabled ? "Held while routing" : "Shared access")) : (model.exclusiveAccessEnabled ? "Requested on next Start" : "Off"))")
+                                .font(.caption)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)

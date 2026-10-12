@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.5.0/build 21 adds a refreshed Bridge dashboard, animated metering, a single stateful Start/Stop button, and opt-in HTTP/OSC status and control for local production networks. Automated tests and live audio/network acceptance remain unrun.**
+Status: **0.5.0/build 22 adds optional Core Audio exclusive device access, building on the refreshed Bridge dashboard, animated metering, a single stateful Start/Stop button, and opt-in HTTP/OSC status and control. Automated tests and live audio/network acceptance remain unrun.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 
@@ -45,6 +45,8 @@ General → Start at login uses Apple's SMAppService for the main app, independe
 For a built-in microphone-to-speakers check, choose the microphone and speakers in Audio, then press **Mono → L + R** and output **Stereo** in Routing (review the displayed physical channel indices). Keep the Mac's speaker volume low to avoid acoustic feedback. Start becomes available only after the complete route and permission are valid; a reason is shown otherwise. Meters are inactive before Start and show measured local buffer peaks afterward. See [audio settings and deferred checks](docs/audio-settings-results.md).
 
 Bridge startup fill and interface buffers offer common frame-size dropdowns plus **Custom** text entry. Choices are filtered to the valid range; powers of two are suggestions, not a guaranteed driver capability list. **Expert** also offers FIFO presets. Interface **Apply** is available only when the driver exposes a writable HAL buffer size. Stop routing before applying; this device-wide change may affect other audio apps. The accepted value is read back and the catalog refreshed; requests can be rounded or rejected. Read-only drivers show an explanation. See [catalog/icon/buffer follow-up](docs/catalog-icon-buffer-results.md).
+
+Settings → Audio → Device access can request Core Audio hog mode for both explicitly selected devices while routing. The request is off by default. If either selected device is owned by another process or does not expose writable hog mode, Start fails with the device identified; partial acquisition is rolled back. The request is released after callbacks detach on Stop. This is a driver-mediated ownership request, not a system-wide guarantee. See [exclusive access results](docs/exclusive-access-results.md).
 
 Input trim and output gain can change live, apply to both lanes, and persist; their −60 to +12 dB controls ramp over 20 ms. Input meters show samples after trim, while a separate warning tracks raw capture reaching full scale. Digital attenuation cannot repair capture clipping. See [buffer and gain follow-up](docs/buffer-gain-results.md).
 

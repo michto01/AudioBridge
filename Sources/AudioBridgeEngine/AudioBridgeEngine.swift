@@ -57,6 +57,7 @@ public struct EngineSnapshot: Sendable {
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
     public let chainBypassed: Bool
+    public let exclusiveAccessMask: UInt32
     public let recentGlitches: Bool
     public let glitchCleanSeconds: Double
 }
@@ -96,7 +97,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, exclusiveAccess: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -118,6 +119,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next; activeSelection = selection
+                ABEngineSetExclusiveAccessRequested(created, exclusiveAccess)
                 delayInputDevice = next.input.device; delayOutputDevice = next.output.device
                 let routing = try Self.makeRouting(next, selection: selection)
                 guard ABEngineAttachRouting(created, routing) else { ABRoutingDestroy(routing); throw AUError("Unable to attach physical channel routing.") }
@@ -132,6 +134,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
                 let status = ABEngineStart(created)
                 guard status == 0 else {
+                    let exclusiveFailureDevice = ABEngineExclusiveFailureDevice(created)
+                    if exclusiveFailureDevice != 0 {
+                        let deviceName = exclusiveFailureDevice == 1 ? next.input.device.name : next.output.device.name
+                        let direction = exclusiveFailureDevice == 1 ? "input" : "output"
+                        let cleanup = stopOnQueue()
+                        failureKind = cleanup == nil ? .actionRequired : .unsafeTeardown
+                        throw Phase2Plan.PlanError("Exclusive access could not be acquired for the selected \(direction) device ‘\(deviceName)’. The device may not support hog mode or another app may own it. Close the competing app or turn off exclusive access in Settings → Audio. \(cleanup ?? "")")
+                    }
                     failureKind = .recoverable
                     let cleanup = stopOnQueue()
                     if cleanup != nil { failureKind = .unsafeTeardown }
@@ -321,6 +331,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auMaxWorkerWakeLatenessNanoseconds: auMetrics?.maxWorkerWakeLatenessNanoseconds ?? 0,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
+            exclusiveAccessMask: ABEngineExclusiveAccessMask(context),
             recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds)
         updated(snapshot)
     }
