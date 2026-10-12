@@ -2,8 +2,52 @@ import AudioBridgeCore
 import CoreAudio
 import Foundation
 
-/// Read-only HAL discovery. Never opens IO, sets formats, or changes defaults.
+/// HAL discovery and explicit operator-requested device controls. Never opens IO,
+/// changes stream formats, or changes system defaults.
 public enum CoreAudioCatalog {
+    public struct OutputVolume: Equatable, Sendable {
+        public let scalar: Float
+        public let writable: Bool
+    }
+
+    /// Reads the selected device's master output volume control, if its driver exposes one.
+    public static func outputVolume(uid: String) throws -> OutputVolume? {
+        guard let device = try snapshot().devices.first(where: { $0.uid == uid }), device.alive == true,
+              try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+            throw ProbeError.invalid("Selected output device is unavailable or its identity changed.")
+        }
+        var property = address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput)
+        guard AudioObjectHasProperty(device.runtimeID, &property) else { return nil }
+        var scalar: Float = 0
+        var size = UInt32(MemoryLayout<Float>.size)
+        try check(AudioObjectGetPropertyData(device.runtimeID, &property, 0, nil, &size, &scalar), device.runtimeID, property.mSelector)
+        guard size == MemoryLayout<Float>.size, scalar.isFinite else {
+            throw ProbeError.invalid("Selected output returned an invalid master volume value.")
+        }
+        var settable: DarwinBoolean = false
+        let status = AudioObjectIsPropertySettable(device.runtimeID, &property, &settable)
+        return OutputVolume(scalar: min(1, max(0, scalar)), writable: status == noErr && settable.boolValue)
+    }
+
+    /// Explicit user command; device volume is shared with system audio and other clients.
+    public static func setOutputVolume(uid: String, scalar: Float) throws -> Float {
+        guard scalar.isFinite, (0...1).contains(scalar),
+              let device = try snapshot().devices.first(where: { $0.uid == uid }), device.alive == true,
+              try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+            throw ProbeError.invalid("Selected output device is unavailable, identity changed, or the volume value is invalid.")
+        }
+        var property = address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput)
+        var settable: DarwinBoolean = false
+        guard AudioObjectHasProperty(device.runtimeID, &property),
+              AudioObjectIsPropertySettable(device.runtimeID, &property, &settable) == noErr,
+              settable.boolValue else {
+            throw ProbeError.invalid("Selected output does not expose a writable master volume control.")
+        }
+        var requested = scalar
+        try check(AudioObjectSetPropertyData(device.runtimeID, &property, 0, nil, UInt32(MemoryLayout<Float>.size), &requested), device.runtimeID, property.mSelector)
+        return try scalarValue(device.runtimeID, property.mSelector, scope: property.mScope)
+    }
+
     public static func bufferIsSettable(_ id: UInt32) -> Bool {
         var property = address(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
         var settable: DarwinBoolean = false
@@ -144,6 +188,11 @@ public enum CoreAudioCatalog {
         }
         try check(status, id, selector)
         guard size == MemoryLayout<T>.size else { throw ProbeError.invalid("Unexpected scalar size") }
+        return value
+    }
+    private static func scalarValue(_ id: UInt32, _ selector: UInt32, scope: UInt32) throws -> Float {
+        let value: Float = try scalar(id, selector, initial: Float(0), scope: scope)
+        guard value.isFinite, (0...1).contains(value) else { throw ProbeError.invalid("Output volume readback is outside the documented scalar range.") }
         return value
     }
     private static func string(_ id: UInt32, _ selector: UInt32) throws -> String {

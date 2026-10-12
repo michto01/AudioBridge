@@ -90,6 +90,8 @@ User-authorized operator-interface follow-up: 0.5.0/build 21 refreshes the Bridg
 
 User-authorized device-access follow-up: 0.5.0/build 22 adds an opt-in request for Core Audio hog mode on both selected endpoints. The C engine acquires before IOProc registration, rolls back partial ownership, confirms device ownership and releases after safe callback teardown. Unsupported or busy devices block Start with an actionable device-specific reason; shared access remains selectable. See [exclusive access results](exclusive-access-results.md). Build and bundle checks are recorded there; testing with competing apps and multiple device drivers remains pending.
 
+User-authorized output-volume follow-up: 0.5.0/build 23 adds a distinct selected-device master-volume slider beside software output gain in the Bridge output card. It reads and writes the explicit output UID through the Core Audio volume scalar property on a utility queue, verifies readback and indicates absent/read-only controls. Device volume/physical output checks remain pending. See [device volume results](device-volume-results.md).
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

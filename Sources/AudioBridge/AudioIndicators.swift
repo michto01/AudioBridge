@@ -159,6 +159,32 @@ struct GainControl: View {
     }
 }
 
+struct OutputDeviceVolumeControl: View {
+    @ObservedObject var model: AppModel
+    private var volume: Binding<Double> {
+        Binding(get: { model.outputDeviceVolume ?? 1 }, set: { model.setOutputDeviceVolume($0) })
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Device volume").font(.caption).frame(width: 80, alignment: .leading)
+                Slider(value: volume, in: 0...1)
+                    .disabled(!model.outputDeviceVolumeWritable)
+                    .accessibilityLabel("Selected output device volume")
+                Text(model.outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
+                    .font(.caption.monospacedDigit()).frame(width: 42, alignment: .trailing)
+            }
+            if !model.outputDeviceVolumeWritable {
+                Text(model.outputDeviceVolumeError ?? (model.outputDeviceVolume == nil
+                    ? "This output does not expose a master volume control."
+                    : "The output device volume control is read-only."))
+                    .font(.caption2).foregroundStyle(.secondary).padding(.leading, 88)
+            }
+        }
+        .help("Controls the selected device's Core Audio master output volume. This is separate from Audio Bridge digital output gain and may also affect other system audio clients. The device may round the requested value to its supported steps.")
+    }
+}
+
 /// Keep incomplete edits (notably a leading minus) away from the live model.
 struct GainEntry: View {
     @Binding var value: Double

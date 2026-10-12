@@ -100,6 +100,9 @@ private struct PlaybackEndpointCard: View {
                 }
                 SignalMeters(model: model, direction: direction)
                 GainControl(model: model, direction: direction)
+                if direction == .output {
+                    OutputDeviceVolumeControl(model: model)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(3)

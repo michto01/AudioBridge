@@ -36,6 +36,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var customBufferFrames: UInt32?
     @Published private(set) var inputTrim: Double = 0
     @Published private(set) var outputGain: Double = 0
+    @Published private(set) var outputDeviceVolume: Double?
+    @Published private(set) var outputDeviceVolumeWritable = false
+    @Published private(set) var outputDeviceVolumeError: String?
     @Published private(set) var auChain = AUChain()
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
@@ -62,6 +65,9 @@ final class AppModel: ObservableObject {
     private var iconCache: [URL: NSImage] = [:]
     private let store = SelectionStore()
     private let probeQueue = DispatchQueue(label: "cz.bytelab.audiobridge.discovery", qos: .utility)
+    private let outputVolumeQueue = DispatchQueue(label: "cz.bytelab.audiobridge.output-volume", qos: .userInitiated)
+    private var outputVolumeWorkItem: DispatchWorkItem?
+    private var outputVolumeGeneration: UInt64 = 0
     private var observation: CatalogObservation?
     private var pendingRefresh = false
     private var canSave = true
@@ -202,6 +208,7 @@ final class AppModel: ObservableObject {
         let endpoint = EndpointSelection(uid: uid.isEmpty ? nil : uid)
         if direction == .input { next.input = endpoint; next.inputMix = [] } else { next.output = endpoint; next.outputMap = [] }
         commit(next)
+        if direction == .output { refreshOutputDeviceVolume() }
     }
     var canEditPatches: Bool { canSave && !routingTransitioning && !changingDeviceBuffer }
     func setInputPatch(channel: Int, left: Double, right: Double) {
@@ -443,6 +450,49 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(decibels, forKey: direction == .input ? "AudioBridge.inputTrim" : "AudioBridge.outputGain")
         engine.setGains(inputTrim: inputTrim, outputGain: outputGain)
     }
+    func refreshOutputDeviceVolume() {
+        outputVolumeGeneration &+= 1
+        let generation = outputVolumeGeneration
+        guard let uid = selection.output.uid else {
+            outputDeviceVolume = nil; outputDeviceVolumeWritable = false; outputDeviceVolumeError = nil
+            return
+        }
+        outputDeviceVolume = nil; outputDeviceVolumeWritable = false; outputDeviceVolumeError = nil
+        outputVolumeQueue.async { [weak self] in
+            let result = Result { try CoreAudioCatalog.outputVolume(uid: uid) }
+            DispatchQueue.main.async {
+                guard let self, self.outputVolumeGeneration == generation, self.selection.output.uid == uid else { return }
+                switch result {
+                case .success(let state):
+                    self.outputDeviceVolume = state.map { Double($0.scalar) }
+                    self.outputDeviceVolumeWritable = state?.writable == true
+                case .failure(let error): self.outputDeviceVolumeError = error.localizedDescription
+                }
+            }
+        }
+    }
+    func setOutputDeviceVolume(_ scalar: Double) {
+        guard let uid = selection.output.uid, outputDeviceVolumeWritable,
+              scalar.isFinite, (0...1).contains(scalar) else { return }
+        outputDeviceVolume = scalar
+        outputVolumeGeneration &+= 1
+        let generation = outputVolumeGeneration
+        outputVolumeWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            let result = Result { try CoreAudioCatalog.setOutputVolume(uid: uid, scalar: Float(scalar)) }
+            DispatchQueue.main.async {
+                guard let self, self.outputVolumeGeneration == generation, self.selection.output.uid == uid else { return }
+                switch result {
+                case .success(let actual): self.outputDeviceVolume = Double(actual); self.outputDeviceVolumeError = nil
+                case .failure(let error):
+                    self.outputDeviceVolumeError = error.localizedDescription
+                    self.refreshOutputDeviceVolume()
+                }
+            }
+        }
+        outputVolumeWorkItem = work
+        outputVolumeQueue.asyncAfter(deadline: .now() + .milliseconds(80), execute: work)
+    }
     var routePlan: Phase2Plan? {
         try? Phase2Plan(selection: selection, devices: catalog.devices, profile: bufferProfile, bufferFrames: customBufferFrames)
     }
@@ -650,6 +700,7 @@ final class AppModel: ObservableObject {
                     self.observation?.watch(snapshot.devices)
                     self.catalog = CatalogSnapshot(devices: snapshot.devices,
                         issues: snapshot.issues + (self.observation?.issues ?? []))
+                    self.refreshOutputDeviceVolume()
                 case .failure(let error):
                     self.catalog = CatalogSnapshot(devices: [], issues: ["Discovery failed: \(error)"])
                 }
@@ -763,6 +814,8 @@ final class AppModel: ObservableObject {
         lines.append("Input matrix: " + selection.inputMix.map { "ch\($0.channel) → L \($0.left), R \($0.right)" }.joined(separator: "; "))
         lines.append("Output map: " + selection.outputMap.map { "ch\($0.channel) ← \($0.source.label)" }.joined(separator: "; "))
         lines.append("Linked input trim: \(inputTrim) dB; output gain: \(outputGain) dB")
+        let deviceVolume = outputDeviceVolume.map { "\(($0 * 100).formatted(.number.precision(.fractionLength(0))))%" } ?? "unavailable"
+        lines.append("Output device volume: \(deviceVolume); writable: \(outputDeviceVolumeWritable); error: \(outputDeviceVolumeError ?? "none")")
         let hogMask = engineSnapshot?.exclusiveAccessMask ?? 0
         lines.append("Exclusive access requested: \(exclusiveAccessEnabled); input held: \((hogMask & 1) != 0); output held: \((hogMask & 2) != 0)")
         lines.append("AU chain bypassed: \(chainBypassed); effects: " + auChain.effects.map { "\($0.name) [\($0.enabled ? "enabled" : "disabled")]" }.joined(separator: " → "))
