@@ -8,7 +8,7 @@ struct AUEffectsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Enable effect processing", isOn: Binding(
                     get: { model.effectsProcessingEnabled }, set: { model.setEffectsProcessingEnabled($0) }
-                )).disabled(model.routingTransitioning)
+                ))
                 HStack {
                     Menu("Add effect…") {
                         ForEach(model.auCatalog) { listing in Button(listing.name) { model.addAU(listing) } }
@@ -33,7 +33,7 @@ struct AUEffectsView: View {
                         }
                         Spacer()
                         Button("Edit…") { model.editAU(effect) }
-                            .disabled(model.routingRequested && !effect.enabled)
+                            .disabled(model.routingRequested && (!effect.enabled || !model.hasLiveAUHost))
                         Button { model.moveAU(id: effect.id, offset: -1) } label: { Image(systemName: "arrow.up") }
                             .disabled(index == 0).help("Move earlier in chain")
                         Button { model.moveAU(id: effect.id, offset: 1) } label: { Image(systemName: "arrow.down") }
@@ -55,6 +55,6 @@ struct AUEffectsView: View {
     }
     private var effectsHelp: String {
         let catalog = model.auCatalogScannedAt.map { "Cached catalog: \(model.auCatalog.count) effects, scanned \($0.formatted(date: .abbreviated, time: .shortened))." } ?? "The catalog has not been scanned yet."
-        return "Physical input mix → input trim → effects in listed order → drift → output gain → physical outputs. Add installed stereo Audio Units, reorder them, or open Edit to adjust their parameters.\n\nTurning Enable effect processing off skips plugin render calls and forwards dry audio. Effects stay loaded and editable; plugin signal meters and DSP state stop advancing. The helper queues and scheduling remain active. The switch is saved and applies at the next processing block; audio already queued can finish first, and audible transitions or retained plugin tails are possible on re-enable. Off does not unload plugins or skip startup loading/validation.\n\nBypass outputs dry audio while effects remain processing, retaining live signal feedback in editors. The bypass preference is preserved while processing is off. Live inserts switch at a processing boundary; audible transitions are possible. A live editor controls the rendering instance; close it to save its settings. Stopped editors save settings for the next Start.\n\n" + catalog + " Rescan after installing or removing effects. Detailed processing counters and latency reports are in Diagnostics."
+        return "Physical input mix → input trim → effects in listed order → drift → output gain → physical outputs. Add installed stereo Audio Units, reorder them, or open Edit to adjust their parameters.\n\nTurning Enable effect processing off skips plugin render calls and forwards dry audio. Effects stay loaded and editable; plugin signal meters and DSP state stop advancing. When switched off during a running AU route, the helper queues remain active. Starting with processing off skips plugin loading and the helper entirely, using the direct audio bridge. Enabling from a direct route safely restarts it to load effects. Changing the switch during preparation or scheduled recovery cancels that attempt and restarts with the new setting; manual Stop cancels that restart. The switch is saved and applies at the next processing block; audio already queued can finish first, and audible transitions or retained plugin tails are possible on re-enable. Switching off an already running AU route retains its loaded plugins; stop and start with processing off to also remove the helper.\n\nBypass outputs dry audio while effects remain processing, retaining live signal feedback in editors. The bypass preference is preserved while processing is off. Live inserts switch at a processing boundary; audible transitions are possible. A live editor controls the rendering instance; close it to save its settings. Stopped editors save settings for the next Start.\n\n" + catalog + " Rescan after installing or removing effects. Detailed processing counters and latency reports are in Diagnostics."
     }
 }

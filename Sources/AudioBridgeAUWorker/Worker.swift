@@ -5,6 +5,7 @@ import AudioToolbox
 import AVFAudio
 import CoreAudioKit
 import Foundation
+import Darwin
 
 @MainActor
 func instantiateWrapper(_ effect: AUEffect) async throws -> AVAudioUnit {
@@ -244,7 +245,15 @@ enum Worker {
             NSApplication.shared.run()
             return
         }
-        guard args[1] == "render", let transport = ABAUTransportOpen(args[2]) else { exit(2) }
+        guard args[1] == "render" else { exit(2) }
+        if args.count >= 5, UInt32(args[4]) != ABAUTransportProtocolVersion() {
+            FileHandle.standardError.write(Data("App/helper transport protocol mismatch. Quit AudioBridge and reopen the complete matching app bundle.\n".utf8))
+            exit(64)
+        }
+        guard let transport = ABAUTransportOpen(args[2]) else {
+            FileHandle.standardError.write(Data(("Unable to open AU shared memory: " + String(cString: ABAUTransportLastError()) + "\n").utf8))
+            exit(2)
+        }
         let parent = getppid()
         let parentWatch = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         parentWatch.schedule(deadline: .now() + 1, repeating: 1)
@@ -258,6 +267,10 @@ enum Worker {
                 try request.chain.validate()
                 let renderer = Renderer(transport: transport, frames: request.blockFrames)
                 try await renderer.prepare(request: request)
+                // Keep startup errors available to the parent without collecting
+                // unbounded third-party stderr during unattended rendering.
+                let nullError = open("/dev/null", O_WRONLY)
+                if nullError >= 0 { _ = dup2(nullError, STDERR_FILENO); close(nullError) }
                 LiveHost(directory: URL(fileURLWithPath: args[3]).deletingLastPathComponent(), request: request, renderer: renderer).start()
             } catch {
                 ABAUTransportFault(transport, -1)

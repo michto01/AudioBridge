@@ -16,6 +16,15 @@ if [[ -e "$DEST" || -L "$DEST" ]]; then
   [[ ! -L "$DEST" && -f "$DEST/Contents/Info.plist" ]] || { echo "Refusing to replace unrelated bundle" >&2; exit 1; }
   ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$DEST/Contents/Info.plist")"
   [[ "$ID" == cz.bytelab.audiobridge ]] || { echo "Refusing to replace unrelated bundle: $ID" >&2; exit 1; }
+  RUNNING_EXECUTABLE="$(cd "$DEST" && pwd -P)/Contents/MacOS/AudioBridge"
+  PROCESS_PATHS="$(/bin/ps -axo comm=)" || { echo "Cannot check running apps; quit AudioBridge or use a new DIST_DIR before packaging." >&2; exit 1; }
+  while IFS= read -r PROCESS_PATH; do
+    PROCESS_PATH="${PROCESS_PATH#"${PROCESS_PATH%%[![:space:]]*}"}"
+    [[ "$PROCESS_PATH" != "$RUNNING_EXECUTABLE" ]] || {
+      echo "Refusing to replace a running AudioBridge bundle. Quit it first or use a new DIST_DIR; replacing its helper can break the active app." >&2
+      exit 1
+    }
+  done <<< "$PROCESS_PATHS"
 fi
 STAGE="$(mktemp -d "$DIST/.package.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT

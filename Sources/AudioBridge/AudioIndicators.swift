@@ -52,21 +52,8 @@ struct SignalMeters: View {
                 HStack(spacing: 8) {
                     Text("Mix \(lane == 0 ? "L" : "R")")
                         .font(.caption).frame(width: 44, alignment: .leading)
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.quaternary)
-                            GeometryReader { bar in
-                                HStack(spacing: 0) {
-                                    Color.green.frame(width: bar.size.width * 0.90)
-                                    Color.yellow.frame(width: bar.size.width * 0.08)
-                                    Color.red.frame(maxWidth: .infinity)
-                                }
-                            }
-                            .mask(alignment: .leading) {
-                                Capsule().frame(width: geometry.size.width * (fresh ? min(1, max(0, (displayedDB[lane] + 60) / 60)) : 0))
-                            }
-                        }
-                    }.frame(height: 8)
+                    MeterBar(fraction: fresh ? min(1, max(0, (displayedDB[lane] + 60) / 60)) : 0)
+                        .frame(height: 8)
                     Text(fresh ? (db.isFinite ? String(format: "%.0f dB", db) : "−∞ dB") : "Inactive")
                         .font(.caption.monospacedDigit()).frame(width: 70, alignment: .trailing)
                     Text(fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date()) ? "CLIP" : "")
@@ -85,7 +72,7 @@ struct SignalMeters: View {
                 let reading = new.flatMap { $0.indices.contains(lane) ? $0[lane] : nil } ?? -.infinity
                 let target = reading.isFinite ? min(0, max(-60, reading)) : -60
                 let rising = target > displayedDB[lane]
-                withAnimation(.easeOut(duration: rising ? 0.045 : 0.24)) {
+                withAnimation(.easeOut(duration: rising ? 0.12 : 0.3)) {
                     displayedDB[lane] = target
                 }
             }
@@ -95,7 +82,31 @@ struct SignalMeters: View {
                 withAnimation(.easeOut(duration: 0.18)) { displayedDB = [-60, -60] }
             }
         }
-        .help("Latest audio-buffer peaks sampled 20 times per second. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
+        .help("Audio-buffer peaks sampled approximately five times per second for display. Health transitions appear immediately. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
+    }
+}
+
+/// Animate drawing inside fixed bounds, rather than laying out nested geometry
+/// readers and changing mask widths for every interpolated meter frame.
+private struct MeterBar: View, Animatable {
+    var fraction: Double
+    var animatableData: Double {
+        get { fraction }
+        set { fraction = newValue }
+    }
+    var body: some View {
+        Canvas { context, size in
+            let radius = size.height / 2
+            context.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius),
+                         with: .color(.primary.opacity(0.10)))
+            let width = size.width * min(1, max(0, fraction))
+            guard width > 0 else { return }
+            let path = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: size.height), cornerRadius: radius)
+            let colors = Gradient(stops: [.init(color: .green, location: 0), .init(color: .green, location: 0.90),
+                .init(color: .yellow, location: 0.90), .init(color: .yellow, location: 0.98),
+                .init(color: .red, location: 0.98), .init(color: .red, location: 1)])
+            context.fill(path, with: .linearGradient(colors, startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)))
+        }
     }
 }
 

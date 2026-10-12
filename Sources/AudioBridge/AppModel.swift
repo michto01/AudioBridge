@@ -87,10 +87,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var auUpdating = false
     @Published private(set) var chainBypassed = false
     @Published private(set) var effectsProcessingEnabled = true
+    private var routeUsesAUHost = false
     private var pendingAU: AULiveCommand?
     private var editAfterUpdate: UUID?
     private var liveEditor = false
-    var canEditAU: Bool { canSave && (!recovery.desired || routingRequested) && !routingTransitioning && !changingDeviceBuffer && !auEditorOpen && !auUpdating }
+    var canEditAU: Bool { canSave && !routingTransitioning && !changingDeviceBuffer && !auEditorOpen && !auUpdating }
+    var hasLiveAUHost: Bool { routingRequested && routeUsesAUHost }
     @Published private(set) var writableBuffers: Set<String> = []
     @Published private(set) var changingDeviceBuffer = false
     @Published private(set) var deviceBufferMessage: String?
@@ -124,7 +126,7 @@ final class AppModel: ObservableObject {
         if let outputIssue { return outputIssue }
         if AVAudioApplication.shared.recordPermission != .granted { return "Grant microphone permission before starting." }
         if auEditorOpen { return "Save or close the AU editor before starting." }
-        if !auChain.active.isEmpty {
+        if effectsProcessingEnabled && !auChain.active.isEmpty {
             if auCatalogScannedAt == nil, auCatalogLoading { return "Discovering installed Audio Units…" }
             if auCatalogScannedAt != nil, let missing = auChain.active.first(where: { effect in !auCatalog.contains(where: { $0.id == effect.identity }) }) {
                 return "Selected Audio Unit is unavailable: \(missing.name). Remove it or explicitly bypass it."
@@ -335,6 +337,7 @@ final class AppModel: ObservableObject {
         routingGeneration &+= 1
         let generation = routingGeneration
         routingFault = nil; engineSnapshot = nil; manuallyStopped = false
+        routeUsesAUHost = effectsProcessingEnabled
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
@@ -382,8 +385,8 @@ final class AppModel: ObservableObject {
             }
         })
     }
-    func stopRouting() {
-        recordRecovery("Manual Stop; automatic retries and launch resume suppressed")
+    func stopRouting(restartAfterStop: Bool = false) {
+        recordRecovery(restartAfterStop ? "Effect processing mode changed; restarting route after safe teardown" : "Manual Stop; automatic retries and launch resume suppressed")
         recovery.stop(); recoveryMessage = nil
         retryWork?.cancel(); retryWork = nil
         pendingAU = nil; auUpdating = false; editAfterUpdate = nil
@@ -400,6 +403,9 @@ final class AppModel: ObservableObject {
                 self.routingTransitioning = false
                 if case .failure(let error) = result {
                     self.routingFault = error.localizedDescription; self.restartRequired = true
+                } else if restartAfterStop {
+                    // A later manual Stop changes generation and cancels this restart.
+                    self.startRouting()
                 }
             }
         }
@@ -466,7 +472,7 @@ final class AppModel: ObservableObject {
             recordRecovery(recoveryMessage!)
             recovery.failed(.recoverable, now: now); refresh(); scheduleRetry(); return
         }
-        if auCatalogLoading && auCatalogScannedAt == nil && !auChain.active.isEmpty {
+        if effectsProcessingEnabled && auCatalogLoading && auCatalogScannedAt == nil && !auChain.active.isEmpty {
             recoveryMessage = "Waiting for effect discovery"
             recovery.failed(.recoverable, now: now); scheduleRetry(); return
         }
@@ -634,14 +640,14 @@ final class AppModel: ObservableObject {
             try chain.validate()
             UserDefaults.standard.set(try JSONEncoder().encode(chain), forKey: "AudioBridge.auChain")
             auChain = chain
-            if routingRequested { sendAU(AULiveCommand(chain: chain)) }
+            if hasLiveAUHost { sendAU(AULiveCommand(chain: chain)) }
         } catch { self.error = error.localizedDescription }
     }
     func addAU(_ listing: AUListing) {
         guard canEditAU else { return }
         let effect = AUEffect(identity: listing.id, name: listing.name)
         var next = auChain; next.effects.append(effect)
-        if routingRequested { editAfterUpdate = effect.id }
+        if hasLiveAUHost { editAfterUpdate = effect.id }
         updateAUChain(next)
         if !routingRequested, auChain.effects.contains(where: { $0.id == effect.id }) { editAU(effect) }
     }
@@ -658,7 +664,9 @@ final class AppModel: ObservableObject {
     }
     func editAU(_ effect: AUEffect) {
         guard canEditAU else { return }
+        if !routingRequested && recovery.desired { stopRouting() }
         if routingRequested {
+            guard hasLiveAUHost else { return }
             liveEditor = true; auEditorOpen = true
             sendAU(AULiveCommand(edit: effect.id)); return
         }
@@ -724,12 +732,24 @@ final class AppModel: ObservableObject {
         }
     }
     func setEffectsProcessingEnabled(_ enabled: Bool) {
-        guard canSave, !routingTransitioning else { return }
+        guard canSave, !quitting else { return }
         effectsProcessingEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "AudioBridge.effectsProcessingEnabled")
         if let directory = auEditorDirectory {
             do { try JSONEncoder().encode(enabled).write(to: directory.appendingPathComponent("processing-enabled.json"), options: .atomic) }
             catch { self.error = "Unable to update editor processing indicator: \(error.localizedDescription)" }
+        }
+        if routingTransitioning {
+            if routingRequested { stopRouting(restartAfterStop: true) }
+            return
+        }
+        if recovery.desired && !routingRequested {
+            stopRouting(restartAfterStop: true)
+            return
+        }
+        if routingRequested && !hasLiveAUHost {
+            if enabled { stopRouting(restartAfterStop: true) }
+            return
         }
         if routingRequested {
             let generation = routingGeneration
@@ -751,7 +771,7 @@ final class AppModel: ObservableObject {
             do { try JSONEncoder().encode(bypass).write(to: directory.appendingPathComponent("bypass.json"), options: .atomic) }
             catch { self.error = "Unable to update editor bypass indicator: \(error.localizedDescription)" }
         }
-        if routingRequested {
+        if hasLiveAUHost {
             let generation = routingGeneration
             engine.auControl(bypass: bypass) { [weak self] result in
                 Task { @MainActor in

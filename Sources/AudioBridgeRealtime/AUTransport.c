@@ -17,6 +17,7 @@ static void failure(const char *operation, int code) {
 }
 
 #define AB_SHARED_VERSION 5
+uint32_t ABAUTransportProtocolVersion(void) { return AB_SHARED_VERSION; }
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
 typedef struct {

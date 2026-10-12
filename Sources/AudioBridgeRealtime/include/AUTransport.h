@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 typedef struct ABAUTransport ABAUTransport;
+uint32_t ABAUTransportProtocolVersion(void);
 typedef struct { uint32_t inputFrames, outputFrames, inFlightFrames, pendingFrames; } ABAUQueueMetrics;
 // Minimal callback snapshot; omit UI/timing counters from audio hot paths.
 // pendingFrames conserves accepted capture minus consumed/discarded source.

@@ -30,18 +30,33 @@ final class AUHostContext {
             let configuration = directory.appendingPathComponent("request.json")
             try JSONEncoder().encode(request).write(to: configuration, options: .atomic)
             process.executableURL = Self.workerURL
-            process.arguments = ["render", String(name), configuration.path]
+            process.arguments = ["render", String(name), configuration.path, String(ABAUTransportProtocolVersion())]
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            let errorLog = directory.appendingPathComponent("startup-error.log")
+            guard FileManager.default.createFile(atPath: errorLog.path, contents: nil) else { throw AUError("Unable to create AU startup diagnostics.") }
+            let errorHandle = try FileHandle(forWritingTo: errorLog)
+            defer { try? errorHandle.close() }
+            process.standardError = errorHandle
+            func detail() -> String {
+                guard let reader = try? FileHandle(forReadingFrom: errorLog) else { return "" }
+                defer { try? reader.close() }
+                let end = (try? reader.seekToEnd()) ?? 0
+                try? reader.seek(toOffset: end > 4096 ? end - 4096 : 0)
+                let data = (try? reader.read(upToCount: 4096)) ?? Data()
+                return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             try process.run()
             let deadline = ProcessInfo.processInfo.systemUptime + 30
             while true {
                 if cancelled() { throw AUError("AU preparation cancelled.") }
                 let facts = ABAUTransportSnapshot(mapping)
-                if facts.fault != 0 { throw AUError("AU chain could not prepare (OSStatus \(facts.fault)). Check selected plugins and saved settings.") }
+                if facts.fault != 0 { throw AUError("AU chain could not prepare (OSStatus \(facts.fault)). \(detail())") }
                 if facts.ready { ABAUTransportUnlink(mapping); break }
-                if !process.isRunning { throw BridgeFailure("AU helper exited while preparing. Stop retries and inspect the plugin if this persists.", kind: .recoverable) }
+                if !process.isRunning {
+                    let reason = detail()
+                    throw BridgeFailure("AU helper exited while preparing (\(process.terminationReason == .uncaughtSignal ? "signal" : "exit") \(process.terminationStatus)). \(reason.isEmpty ? "Quit and reopen the complete matching bundle; disable effect processing to start a direct dry route." : reason)", kind: .actionRequired)
+                }
                 if ProcessInfo.processInfo.systemUptime > deadline { throw BridgeFailure("AU preparation timed out. Routing was not started.", kind: .recoverable) }
                 usleep(10_000)
             }

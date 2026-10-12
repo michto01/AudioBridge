@@ -106,6 +106,8 @@ User-authorized diagnostic follow-up: 0.5.6/build 29 adds Reset counters as a sa
 
 User-authorized effect suspension: 0.5.7/build 30 adds a saved Enable effect processing switch. Off forwards dry stereo without invoking AU render calls; loaded units and settings remain available, while plugin meters/DSP state pause. Bypass remains a separate dry-output mode with plugin rendering. See [effect-processing switch results](effect-processing-switch-results.md). Worker scheduling refinement and Phase 5 operational acceptance remain pending.
 
+User-authorized startup/rendering repair: 0.5.8/build 31 guards running-bundle replacement, identifies incompatible helper startup as action-required, exposes effect controls during recovery, supports direct routing when starting with effects off, and publishes UI telemetry at 5 Hz while retaining the 20 Hz watchdog. Meter animation draws inside fixed bounds. See [helper startup and UI load results](helper-startup-ui-load-results.md). Effect-mode route restarts respect manual Stop. Worker scheduling refinement and Phase 5 operational acceptance remain pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

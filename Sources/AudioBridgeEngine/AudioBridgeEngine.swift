@@ -84,6 +84,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private var context: OpaquePointer?
     private var plan: Phase2Plan?
     private var watchdog: DispatchSourceTimer?
+    private struct TelemetryState: Equatable {
+        let fault: String?
+        let primed, inputActive, outputActive, warning: Bool
+        let responseID: UUID?
+    }
+    private var lastTelemetryState: TelemetryState?
+    private var lastTelemetryTime: Double = 0
     private var startedAt = Date()
     private var previousInputCallbacks: UInt64 = 0
     private var previousOutputCallbacks: UInt64 = 0
@@ -131,10 +138,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 guard ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift configuration.") }
                 do {
                     guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
-                    auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass,
-                        effectsProcessingEnabled: effectsProcessingEnabled, cancelled: { [self] in
-                        self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
-                    })
+                    if effectsProcessingEnabled {
+                        auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass,
+                            effectsProcessingEnabled: true, cancelled: { [self] in
+                            self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
+                        })
+                    } else { auHost = nil }
                     guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
                 }
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
@@ -156,6 +165,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
                 queueLowFrames = nil; queueHighFrames = nil
                 recentGlitches = RecentGlitches()
+                lastTelemetryState = nil; lastTelemetryTime = 0
                 lastInputActivity = nil; lastOutputActivity = nil; lastDeviceCheck = .distantPast
                 let timer = DispatchSource.makeTimerSource(queue: queue)
                 watchdog = timer
@@ -312,6 +322,15 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
                 formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)"; faultKind = .unsafeTeardown }
+        // Keep the 20 Hz watchdog and loss accounting, but format/publish UI
+        // snapshots only at 5 Hz. Faults, delivery transitions and AU replies
+        // bypass throttling so supervision/control never waits on UI cadence.
+        let telemetryTime = ProcessInfo.processInfo.systemUptime
+        let telemetryState = TelemetryState(fault: fault, primed: metrics.primed,
+            inputActive: inputActive, outputActive: outputActive,
+            warning: recentGlitches.active, responseID: auResponse?.id)
+        guard fault != nil || telemetryState != lastTelemetryState || telemetryTime - lastTelemetryTime >= 0.2 else { return }
+        lastTelemetryState = telemetryState; lastTelemetryTime = telemetryTime
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
             underrunFrames: metrics.underrunFrames, overrunFrames: metrics.overrunFrames,
@@ -335,7 +354,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,
             captureQueueFrames: auMetrics?.inputFrames ?? 0, pendingSourceFrames: auMetrics?.pendingFrames ?? metrics.bufferedFrames,
             processedQueueFrames: auMetrics?.outputFrames ?? 0,
-            auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: plan.auBlockFrames,
+            auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: auHost == nil ? 0 : plan.auBlockFrames,
             resamplerLookaheadFrames: ABResamplerLookahead(), queueLowFrames: queueLowFrames, queueHighFrames: queueHighFrames,
             auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
             auLastRenderNanoseconds: auMetrics?.lastRenderNanoseconds ?? 0, auMaxRenderNanoseconds: auMetrics?.maxRenderNanoseconds ?? 0,
