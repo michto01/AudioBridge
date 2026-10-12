@@ -174,7 +174,7 @@ private struct SettingsView: View {
                     }
                     if !model.simpleAudioMode {
                         BufferSettings(model: model)
-                        InfoGroupBox(L("AU render block"), message: L("Automatic follows the larger interface buffer, up to 256 frames. An explicit block sets the AU maximum render size before resources are allocated. It must fit the FIFO reserve. Larger blocks reduce wake/render overhead but add batching delay. Smaller blocks cannot remove the capture device's batching delay and may increase CPU or overload some plugins. Changes take effect at the next Start.")) {
+                        InfoGroupBox(L("AU render block"), message: L("Automatic uses half the larger interface buffer, rounded down to a power of two between 16 and 256 frames. An explicit block sets the AU maximum render size before resources are allocated. It must fit the FIFO reserve. Larger blocks reduce wake/render overhead but add batching delay. Smaller blocks cannot remove the capture device's batching delay and may increase CPU or overload some plugins. Changes take effect at the next Start.")) {
                             Picker(L("Block size"), selection: Binding(get: { model.customAUFrames ?? 0 }, set: { model.setAUFrames($0 == 0 ? nil : $0) })) {
                                 Text(L("Automatic")).tag(UInt32(0))
                                 ForEach([16, 32, 64, 128, 256, 512, 1024], id: \.self) { Text(L("\($0) frames")).tag(UInt32($0)) }

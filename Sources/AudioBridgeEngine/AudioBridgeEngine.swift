@@ -101,12 +101,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     }
     private var lastTelemetryState: TelemetryState?
     private var lastTelemetryTime: Double = 0
-    private var startedAt = Date()
+    private var startedAt = ProcessInfo.processInfo.systemUptime
     private var previousInputCallbacks: UInt64 = 0
     private var previousOutputCallbacks: UInt64 = 0
-    private var lastDeviceCheck = Date.distantPast
-    private var lastInputActivity: Date?
-    private var lastOutputActivity: Date?
+    private var lastDeviceCheck = -Double.infinity
+    private var lastInputActivity: Double?
+    private var lastOutputActivity: Double?
     private var auHost: AUHostContext?
     private let preparationLock = NSLock()
     private var preparationCancelled = false
@@ -135,7 +135,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     || fresh.devices.first(where: { $0.uid == selection.output.uid })?.alive != true {
                     failureKind = .deviceLost
                 }
-                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames, auFrames: effectsProcessingEnabled ? auFrames : nil)
+                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames, auFrames: auFrames)
                 guard let created = ABEngineCreate(next.input.device.runtimeID, next.output.device.runtimeID,
                     next.capacity, next.prefill) else {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
@@ -148,12 +148,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 guard ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift configuration.") }
                 do {
                     guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
-                    if effectsProcessingEnabled {
-                        auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass,
-                            effectsProcessingEnabled: true, cancelled: { [self] in
-                            self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
-                        })
-                    } else { auHost = nil }
+                    // Preserve the transport for live DSP changes. A dry start
+                    // prepares no plugin; the saved chain can be loaded later
+                    // while dry blocks continue through the same queues.
+                    auHost = try AUHostContext(chain: effectsProcessingEnabled ? effects : AUChain(), plan: next, bypass: chainBypass,
+                        effectsProcessingEnabled: effectsProcessingEnabled, cancelled: { [self] in
+                        self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
+                    })
                     guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
                 }
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
@@ -172,11 +173,11 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     if context != nil { failureKind = .unsafeTeardown }
                     throw Phase2Plan.PlanError("Unable to start the selected devices (OSStatus \(status)). \(cleanup ?? "")")
                 }
-                startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
+                startedAt = ProcessInfo.processInfo.systemUptime; previousInputCallbacks = 0; previousOutputCallbacks = 0
                 queueLowFrames = nil; queueHighFrames = nil
                 recentGlitches = RecentGlitches()
                 lastTelemetryState = nil; lastTelemetryTime = 0
-                lastInputActivity = nil; lastOutputActivity = nil; lastDeviceCheck = .distantPast
+                lastInputActivity = nil; lastOutputActivity = nil; lastDeviceCheck = -Double.infinity
                 let timer = DispatchSource.makeTimerSource(queue: queue)
                 watchdog = timer
                 timer.schedule(deadline: .now(), repeating: .milliseconds(50))
@@ -266,14 +267,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private func poll(updated: @escaping @Sendable (EngineSnapshot) -> Void) {
         guard let context, let plan else { return }
         let metrics = ABEngineMetrics(context)
-        let now = Date()
-        let elapsed = now.timeIntervalSince(startedAt)
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = (now - startedAt)
         if metrics.inputCallbacks > previousInputCallbacks { lastInputActivity = now }
         if metrics.outputCallbacks > previousOutputCallbacks { lastOutputActivity = now }
         // A device may deliver less often than UI polls; do not flash Inactive between healthy callbacks.
         let grace = max(0.25, Double(max(plan.input.device.bufferFrames ?? 512, plan.output.device.bufferFrames ?? 512)) / plan.sampleRate * 3)
-        let inputActive = lastInputActivity.map { now.timeIntervalSince($0) <= grace } ?? false
-        let outputActive = lastOutputActivity.map { now.timeIntervalSince($0) <= grace } ?? false
+        let inputActive = lastInputActivity.map { (now - $0) <= grace } ?? false
+        let outputActive = lastOutputActivity.map { (now - $0) <= grace } ?? false
         previousInputCallbacks = metrics.inputCallbacks; previousOutputCallbacks = metrics.outputCallbacks
         var fault: String?
         var faultKind = BridgeFailureKind.recoverable
@@ -282,21 +283,21 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             fault = "Audio buffer layout changed or became invalid. Refresh devices and start again."
             faultKind = metrics.layoutFaults > 0 ? .deviceLost : .actionRequired
         }
-        else if fault == nil, elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
-            || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
+        else if fault == nil, elapsed > 5 && ((lastInputActivity.map { (now - $0) > 2 } ?? true)
+            || (lastOutputActivity.map { (now - $0) > 2 } ?? true)
             || (!metrics.primed && metrics.rebufferEvents == 0)) {
             let missing = [
-                lastInputActivity.map { now.timeIntervalSince($0) <= 2 } == true ? nil : "input callbacks",
-                lastOutputActivity.map { now.timeIntervalSince($0) <= 2 } == true ? nil : "output callbacks",
+                lastInputActivity.map { (now - $0) <= 2 } == true ? nil : "input callbacks",
+                lastOutputActivity.map { (now - $0) <= 2 } == true ? nil : "output callbacks",
                 metrics.primed ? nil : "processed startup buffer"
             ].compactMap { $0 }.joined(separator: ", ")
             if !inputActive || !outputActive { faultKind = .deviceLost }
             fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auHost?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
-        // Stop safely on change; the supervisor re-resolves the same UIDs for retry.
-        if now.timeIntervalSince(lastDeviceCheck) >= 0.5 {
-          lastDeviceCheck = Date()
+        // Stop/latch on change; only explicit local re-arm may reuse these UIDs.
+        if (now - lastDeviceCheck) >= 0.5 {
+          lastDeviceCheck = now
           do {
             let fresh = try CoreAudioCatalog.snapshot(selectedUIDs: [plan.input.device.uid, plan.output.device.uid])
             let input = fresh.devices.first { $0.uid == plan.input.device.uid }

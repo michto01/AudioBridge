@@ -100,6 +100,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var chainBypassed = false
     @Published private(set) var effectsProcessingEnabled = true
     private var routeUsesAUHost = false
+    private var routeAUChainLoaded = false
     private var pendingAU: AULiveCommand?
     private var editAfterUpdate: UUID?
     private var liveEditor = false
@@ -372,7 +373,8 @@ final class AppModel: ObservableObject {
         routingGeneration &+= 1
         let generation = routingGeneration
         routingFault = nil; engineSnapshot = nil; manuallyStopped = false
-        routeUsesAUHost = effectsProcessingEnabled
+        routeUsesAUHost = true
+        routeAUChainLoaded = effectsProcessingEnabled
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: simpleAudioMode ? .balanced : bufferProfile, bufferFrames: simpleAudioMode ? nil : customBufferFrames,
@@ -383,7 +385,9 @@ final class AppModel: ObservableObject {
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
                 if let response = snapshot.auResponse, response.id == self.pendingAU?.id {
+                    let changedChain = self.pendingAU?.chain != nil
                     self.pendingAU = nil; self.auUpdating = false
+                    if changedChain && response.error == nil { self.routeAUChainLoaded = true }
                     if self.liveEditor { self.liveEditor = false; self.auEditorOpen = false }
                     if let error = response.error { self.error = "Live AU change failed: \(error)" }
                     if let effect = response.effect, let index = self.auChain.effects.firstIndex(where: { $0.id == effect.id && $0.identity == effect.identity }) {
@@ -396,6 +400,7 @@ final class AppModel: ObservableObject {
                        let effect = self.auChain.effects.first(where: { $0.id == id }) {
                         self.editAfterUpdate = nil; self.editAU(effect)
                     } else { self.editAfterUpdate = nil }
+                    if response.error == nil { self.applyEffectProcessingToRunningRoute() }
                 }
                 if let fault = snapshot.fault {
                     self.handleRoutingFailure(fault, kind: snapshot.faultKind ?? .actionRequired)
@@ -416,12 +421,13 @@ final class AppModel: ObservableObject {
                 } else {
                     self.routingStartedAt = Date()
                     self.recordRecovery("HAL started; callback confirmation pending")
+                    self.applyEffectProcessingToRunningRoute()
                 }
             }
         })
     }
-    func stopRouting(restartAfterStop: Bool = false) {
-        recordRecovery(restartAfterStop ? "Effect processing mode changed; restarting route after safe teardown" : "Manual Stop; automatic retries and launch resume suppressed")
+    func stopRouting() {
+        recordRecovery("Manual Stop; automatic retries and launch resume suppressed")
         recovery.stop(); recoveryMessage = nil
         retryWork?.cancel(); retryWork = nil
         pendingAU = nil; auUpdating = false; editAfterUpdate = nil
@@ -439,9 +445,6 @@ final class AppModel: ObservableObject {
                 if case .failure(let error) = result {
                     self.routingFault = error.localizedDescription
                     self.restartRequired = (error as? BridgeFailure)?.kind == .unsafeTeardown
-                } else if restartAfterStop {
-                    // A later manual Stop changes generation and cancels this restart.
-                    self.startRouting()
                 }
             }
         }
@@ -619,12 +622,12 @@ final class AppModel: ObservableObject {
         outputVolumeQueue.asyncAfter(deadline: .now() + .milliseconds(80), execute: work)
     }
     var routePlan: Phase2Plan? {
-        try? Phase2Plan(selection: selection, devices: catalog.devices, profile: simpleAudioMode ? .balanced : bufferProfile, bufferFrames: simpleAudioMode ? nil : customBufferFrames, auFrames: simpleAudioMode || !effectsProcessingEnabled ? nil : customAUFrames)
+        try? Phase2Plan(selection: selection, devices: catalog.devices, profile: simpleAudioMode ? .balanced : bufferProfile, bufferFrames: simpleAudioMode ? nil : customBufferFrames, auFrames: simpleAudioMode ? nil : customAUFrames)
     }
     var routeReadiness: String? {
         if let issue = simpleSettingsIssue { return issue }
         guard inputIssue == nil, outputIssue == nil else { return nil }
-        do { _ = try Phase2Plan(selection: selection, devices: catalog.devices, profile: simpleAudioMode ? .balanced : bufferProfile, bufferFrames: simpleAudioMode ? nil : customBufferFrames, auFrames: simpleAudioMode || !effectsProcessingEnabled ? nil : customAUFrames); return nil }
+        do { _ = try Phase2Plan(selection: selection, devices: catalog.devices, profile: simpleAudioMode ? .balanced : bufferProfile, bufferFrames: simpleAudioMode ? nil : customBufferFrames, auFrames: simpleAudioMode ? nil : customAUFrames); return nil }
         catch { return error.localizedDescription }
     }
     func quit() {
@@ -711,6 +714,11 @@ final class AppModel: ObservableObject {
         if !routingRequested && recovery.desired { stopRouting() }
         if routingRequested {
             guard hasLiveAUHost else { return }
+            if !routeAUChainLoaded {
+                editAfterUpdate = effect.id
+                sendAU(AULiveCommand(chain: auChain))
+                return
+            }
             liveEditor = true; auEditorOpen = true
             sendAU(AULiveCommand(edit: effect.id)); return
         }
@@ -783,26 +791,25 @@ final class AppModel: ObservableObject {
             do { try JSONEncoder().encode(enabled).write(to: directory.appendingPathComponent("processing-enabled.json"), options: .atomic) }
             catch { self.error = "Unable to update editor processing indicator: \(error.localizedDescription)" }
         }
-        if routingTransitioning {
-            if routingRequested { stopRouting(restartAfterStop: true) }
+        // Preparation completion and the next recovery attempt reconcile the
+        // latest preference. A switch never stops/restarts either device.
+        applyEffectProcessingToRunningRoute()
+    }
+    private func applyEffectProcessingToRunningRoute() {
+        guard routingRequested, !routingTransitioning, hasLiveAUHost else { return }
+        if effectsProcessingEnabled && !routeAUChainLoaded {
+            // Keep forwarding dry audio while the saved chain prepares. The
+            // matching adoption response enables DSP only if still requested.
+            guard pendingAU == nil else { return }
+            sendAU(AULiveCommand(chain: auChain))
             return
         }
-        if recovery.desired && !routingRequested {
-            stopRouting(restartAfterStop: true)
-            return
-        }
-        if routingRequested && !hasLiveAUHost {
-            if enabled { stopRouting(restartAfterStop: true) }
-            return
-        }
-        if routingRequested {
-            let generation = routingGeneration
-            engine.auControl(effectsProcessingEnabled: enabled) { [weak self] result in
-                Task { @MainActor in
-                    guard let self, self.routingGeneration == generation, self.routingRequested else { return }
-                    if case .failure(let error) = result {
-                        self.stopForActionRequired("Effect processing switch failed: \(error.localizedDescription)")
-                    }
+        let generation = routingGeneration
+        engine.auControl(effectsProcessingEnabled: effectsProcessingEnabled) { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.routingGeneration == generation, self.routingRequested else { return }
+                if case .failure(let error) = result {
+                    self.stopForActionRequired("Effect processing switch failed: \(error.localizedDescription)")
                 }
             }
         }

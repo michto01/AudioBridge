@@ -55,7 +55,7 @@ final class AUHostContext {
                 if facts.ready { ABAUTransportUnlink(mapping); break }
                 if !process.isRunning {
                     let reason = detail()
-                    throw BridgeFailure("AU helper exited while preparing (\(process.terminationReason == .uncaughtSignal ? "signal" : "exit") \(process.terminationStatus)). \(reason.isEmpty ? "Quit and reopen the complete matching bundle; disable effect processing to start a direct dry route." : reason)", kind: .actionRequired)
+                    throw BridgeFailure("AU helper exited while preparing (\(process.terminationReason == .uncaughtSignal ? "signal" : "exit") \(process.terminationStatus)). \(reason.isEmpty ? "Quit and reopen the complete matching bundle. Starting with effect processing off skips plugin loading, but still requires a working transport helper." : reason)", kind: .actionRequired)
                 }
                 if ProcessInfo.processInfo.systemUptime > deadline { throw BridgeFailure("AU preparation timed out. Routing was not started.", kind: .recoverable) }
                 usleep(10_000)

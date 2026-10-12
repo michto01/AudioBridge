@@ -18,6 +18,14 @@ Periodic AU-path losses and high CPU have not been attributed to a specific plug
 
 ## Consequences and acceptance
 
+### Operator amendment — continuous DSP switching (2026-10-13)
+
+The operator requests DSP on/off without stopping audio and reports stable recent delivery with an AU block half the larger device buffer (128 input / 32 output / AU 64). Automatic now tries that half size, rounded down to a power of two within 16–256; explicit Expert sizes remain unchanged. This is a starting heuristic, not a compatibility guarantee.
+
+All app routes retain the queued helper transport so the switch does not restart HAL or flush audio. A DSP-off start prepares an empty chain without loading saved plugins. First enable prepares/adopts that chain while dry audio continues; only successful adoption enables rendering if still requested. Loaded chains remain editable while off. Dry/wet changes use a 20 ms sample ramp; plugin rendering stops after fade-out. Bypass keeps rendering. This supersedes the earlier direct-start/restart-on-enable behavior. The trade-off is helper/queue overhead and dependency while DSP is off. Plugin failure remains explicit; this amendment does not authorize silently continuing after a requested chain fails.
+
+No claim is made that every transition is inaudible: dry/wet paths are not latency-aligned, stored plugin tails/state may resume, and expensive plugin setup/rendering can still disrupt scheduling. CPU and long-run acceptance remain required.
+
 This supersedes automatic device-loss reconnection in the original overview/architecture/Phase 4 contract. Recovery of other typed recoverable faults retains capped backoff. No vendor-specific audio handling, independent nominal-rate conversion, routing expansion or recording is introduced.
 
 Per-plugin wall timing and a bounded latest-starvation snapshot provide evidence, not proof of causality. Low latency and long-run reliability require matched comparisons, loopback and soak acceptance. See [0.6 results](../release-0.6-results.md). No Phase 5 operational gate is passed by this decision.

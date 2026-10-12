@@ -35,16 +35,24 @@ final class RenderDriver: @unchecked Sendable {
         while true {
             guard ABAUTransportWaitForBlock(transport, current.frames) else { return }
             if let pointer = ABRendererExchangeTake(exchange) {
-                current = Unmanaged<Renderer>.fromOpaque(pointer).takeUnretainedValue()
+                let next = Unmanaged<Renderer>.fromOpaque(pointer).takeUnretainedValue()
+                next.wetMix = current.wetMix
+                current = next
                 autoreleasepool { current.installRenderContext() }
                 ABAUTransportSetLatency(transport, current.latencySeconds)
                 ABRendererExchangeAcknowledge(exchange, pointer)
             }
-            // Bound temporary Objective-C objects from plugin rendering on this
-            // long-lived helper thread. This is outside every HAL callback.
-            let succeeded = autoreleasepool {
-                current.processBlock(bypass: ABAUTransportBypassed(transport),
-                    effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(transport))
+            let enabled = ABAUTransportEffectsProcessingEnabled(transport)
+            let bypass = ABAUTransportBypassed(transport)
+            let succeeded: Bool
+            if !current.stages.isEmpty && (enabled || current.wetMix > 0) {
+                // Bound legacy plugin temporaries. The dry-only path performs
+                // no plugin/Objective-C calls and needs no per-block pool.
+                succeeded = autoreleasepool {
+                    current.processBlock(bypass: bypass, effectsProcessingEnabled: enabled)
+                }
+            } else {
+                succeeded = current.processBlock(bypass: bypass, effectsProcessingEnabled: enabled)
             }
             if !succeeded { return }
         }

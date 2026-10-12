@@ -46,9 +46,10 @@ public struct Phase2Plan: Sendable {
         guard prefill >= max(16, largestBuffer), prefill <= 32768 else {
             throw PlanError("Bridge buffering must be between \(max(16, largestBuffer)) and 32768 frames for these devices.")
         }
-        // Avoid waiting for multiple small device callbacks merely because the
-        // bridge reserve is larger. Preserve the existing 16–256-frame bounds.
-        let automatic = try AUBlockSizing.frames(startupFill: min(prefill, largestBuffer))
+        // Publish the first processed portion before finishing a capture burst.
+        // Smaller batches trade more render calls for earlier ready audio;
+        // explicit expert sizes remain untouched. Keep the 16–256 bounds.
+        let automatic = try AUBlockSizing.frames(startupFill: min(prefill, max(16, largestBuffer / 2)))
         let block = auFrames ?? automatic
         guard block >= 16, block <= 1024, block & (block - 1) == 0, block <= prefill else {
             throw PlanError("AU blocks must be a power of two from 16 to 1024 frames and no larger than the FIFO reserve.")

@@ -449,12 +449,14 @@ OSStatus ABEngineStart(ABEngine *engine) {
     status = AudioDeviceCreateIOProcID(engine->outputDevice, output_callback, engine, &engine->outputProc);
     if (status != noErr) return status;
     atomic_store_explicit(&engine->enabled, true, memory_order_release);
-    status = AudioDeviceStart(engine->inputDevice, engine->inputProc);
-    if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
-    engine->inputStarted = true;
+    // Output can wait silently for priming. Starting capture first lets a
+    // slow output-device startup fill/overflow queues before any consumption.
     status = AudioDeviceStart(engine->outputDevice, engine->outputProc);
     if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
     engine->outputStarted = true;
+    status = AudioDeviceStart(engine->inputDevice, engine->inputProc);
+    if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
+    engine->inputStarted = true;
     return noErr;
 }
 void ABEngineSetExclusiveAccessRequested(ABEngine *engine, bool requested) {

@@ -116,6 +116,10 @@ final class Renderer: @unchecked Sendable {
     var stages: [Stage] = []
     var latencySeconds: Float = 0
     var blockBudgetNanoseconds: UInt64 = 0
+    // Render-thread ownership only. Fade before suspending plugins; no
+    // reallocation, device restart or queue flush for a DSP/bypass switch.
+    var wetMix: Float = 0
+    private var wetStep: Float = 1
 
     init(transport: OpaquePointer, frames: UInt32) {
         self.transport = transport; self.frames = frames
@@ -136,6 +140,7 @@ final class Renderer: @unchecked Sendable {
             throw AUError("Invalid helper block duration.")
         }
         blockBudgetNanoseconds = UInt64(budget)
+        wetStep = Float(1 / max(1, request.sampleRate * 0.02))
         var latency: Double = 0
         for effect in request.chain.active {
             let wrapper = try await instantiateWrapper(effect)
@@ -196,9 +201,10 @@ final class Renderer: @unchecked Sendable {
             let renderStart = ABAUTransportBeginBlock(transport, frames)
             defer { ABAUTransportEndBlock(transport, renderStart) }
             guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
-            // Explicit DSP suspension: retain loaded units/settings for live
-            // re-enable, but never invoke their pull/render blocks while off.
-            if !effectsProcessingEnabled || stages.isEmpty {
+            // Retain loaded units/settings for live re-enable. After fade-out,
+            // suspend their pull/render blocks and forward dry audio only.
+            if stages.isEmpty || (!effectsProcessingEnabled && wetMix == 0) {
+                wetMix = 0
                 guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
                 return true
             }
@@ -228,10 +234,19 @@ final class Renderer: @unchecked Sendable {
                 }
                 swap(&input, &output)
             }
+            let wetTarget: Float = effectsProcessingEnabled && !bypass ? 1 : 0
             for i in 0..<count {
                 let a = input[i], b = input[count + i]
                 guard a.isFinite, b.isFinite else { fail(kAudioUnitErr_InvalidPropertyValue); return false }
-                if !bypass { scratch[i * 2] = a; scratch[i * 2 + 1] = b }
+                if wetMix < wetTarget { wetMix = min(wetTarget, wetMix + wetStep) }
+                else if wetMix > wetTarget { wetMix = max(wetTarget, wetMix - wetStep) }
+                if wetMix == 1 {
+                    scratch[i * 2] = a; scratch[i * 2 + 1] = b
+                } else if wetMix > 0 {
+                    let dryL = scratch[i * 2], dryR = scratch[i * 2 + 1]
+                    scratch[i * 2] = (1 - wetMix) * dryL + wetMix * a
+                    scratch[i * 2 + 1] = (1 - wetMix) * dryR + wetMix * b
+                }
             }
             guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
         }

@@ -1,6 +1,6 @@
 /// Cumulative counters remain intact. Only the presentation recovers after
-/// five continuously healthy seconds on a monotonic clock. Queue recentering
-/// and rebuffer bookkeeping alone are not evidence of lost frames.
+/// five continuously healthy seconds on a monotonic clock. Recentered frames
+/// are actual source discards; rebuffer bookkeeping alone is not sample loss.
 public struct DeliveryCounters: Equatable, Sendable {
     public let underruns, overruns, formatFaults, rebuffers, recentered: UInt64
     public init(underruns: UInt64 = 0, overruns: UInt64 = 0, formatFaults: UInt64 = 0,
@@ -27,6 +27,9 @@ public struct RecentGlitches: Sendable {
         }
         if counters.overruns > previous.overruns {
             reasons.append("Input overrun: \(counters.overruns - previous.overruns) frames dropped")
+        }
+        if counters.recentered > previous.recentered {
+            reasons.append("Queue recentering: \(counters.recentered - previous.recentered) source frames discarded")
         }
         if counters.formatFaults > previous.formatFaults {
             reasons.append("Audio format fault: \(counters.formatFaults - previous.formatFaults) new fault(s)")

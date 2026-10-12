@@ -1,5 +1,7 @@
 # Architecture
 
+Current continuous-switch amendment: app routes retain the AU helper transport with DSP off, but a dry start loads no plugins. First enable prepares/adopts the saved chain while dry blocks continue. A 20 ms dry/wet ramp precedes DSP suspension. Output starts before capture; callback supervision uses monotonic time. See [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) and [pipeline audit](continuous-dsp-pipeline-results.md).
+
 Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
 
 

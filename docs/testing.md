@@ -72,4 +72,4 @@ Manual acceptance: mono and stereo defaults; more than two inputs; duplicated L/
 
 ## 0.6 reliability acceptance
 
-Use the comparison matrix, queue/wake/lifetime cases, explicit re-arm checks and 12-hour gate in [0.6 results](release-0.6-results.md#deferred-06-acceptance). Direct, empty-helper, loaded-DSP-off, individual active plugins and full-chain runs must use equal measurement windows and identical device/reserve settings. No execution is implied by this checklist.
+Use the comparison matrix, queue/wake/lifetime cases, explicit re-arm checks and 12-hour gate in [0.6 results](release-0.6-results.md#deferred-06-acceptance). For 0.6.2 compare an empty transport, loaded-DSP-off, individual active plugins and the full chain using equal measurement windows and identical device/reserve settings. DSP-off now retains transport; a no-helper baseline requires a separately identified earlier build or isolated harness. Include the transition/startup/monotonic supervision cases in [continuous DSP results](continuous-dsp-pipeline-results.md). No execution is implied by this checklist.

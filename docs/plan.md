@@ -118,6 +118,8 @@ CPU comparisons and Phase 5 operational acceptance remain pending.
 
 ## 0.6 — Audio reliability revision (current review gate)
 
+Continuous DSP/startup follow-up: 0.6.2/build 35 keeps transport active for DSP switching, lazily prepares saved effects after a dry start, applies a 20 ms dry/wet fade, tries half-device AU blocks in Automatic, starts output before capture, uses monotonic callback supervision and reports actual recenter discards as recent loss. Czech buffer units now use vzorky. See [whole-pipeline audit and deferred acceptance](continuous-dsp-pipeline-results.md). Live switching, CPU and long-run acceptance remain pending.
+
 Audio-first follow-up: 0.6.1/build 34 corrects the full-block-only AU input pull callback to support timestamp-addressed portions of a prepared block with bounded validation. See [source finding and deferred acceptance](au-input-pull-results.md). This is not a confirmed fix for the operator's periodic underruns; current runtime diagnostics and the 0.6 operational gate remain pending. The microphone-permission icon is deferred.
 
 User authorized this slice on 2026-10-12. [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) records device-loss stop/re-arm semantics and operator setup. Version 0.6.0/build 33 implements lifetime/reporting repairs, asynchronous AU workgroup/context integration, notification-driven latency refresh, plugin/stall telemetry, explicit AU blocks, shared Simple configuration, retained Expert controls and English/Czech localization. See [implementation, commands and pending acceptance](release-0.6-results.md).
