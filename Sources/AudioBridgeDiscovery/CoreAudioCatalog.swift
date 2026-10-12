@@ -3,7 +3,8 @@ import CoreAudio
 import Foundation
 
 /// HAL discovery and explicit operator-requested device controls. Never opens IO,
-/// changes stream formats, or changes system defaults.
+/// writes stream ASBDs, or changes system defaults. Explicit device-wide rate
+/// and buffer requests are performed only while the app's route is stopped.
 public enum CoreAudioCatalog {
     public struct OutputVolume: Equatable, Sendable {
         public let scalar: Float
@@ -48,6 +49,24 @@ public enum CoreAudioCatalog {
         return try scalarValue(device.runtimeID, property.mSelector, scope: property.mScope)
     }
 
+    public static func rateIsSettable(_ id: UInt32) -> Bool {
+        var property = address(kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+        var settable: DarwinBoolean = false
+        return AudioObjectIsPropertySettable(id, &property, &settable) == noErr && settable.boolValue
+    }
+    /// Explicit stopped-route request; re-resolve the UID before changing hardware.
+    public static func setNominalRate(uid: String, rate: Double) throws -> Double {
+        guard rate.isFinite, rate > 0,
+              let device = try snapshot(selectedUIDs: [uid]).devices.first(where: { $0.uid == uid }),
+              device.alive == true, device.availableSampleRates.contains(where: { rate >= $0.minimum && rate <= $0.maximum }),
+              rateIsSettable(device.runtimeID), try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+            throw ProbeError.invalid("Selected device cannot accept this sample rate. Check Audio MIDI Setup or use Expert mode.")
+        }
+        var property = address(kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+        var value = rate
+        try check(AudioObjectSetPropertyData(device.runtimeID, &property, 0, nil, UInt32(MemoryLayout<Double>.size), &value), device.runtimeID, property.mSelector)
+        return try scalar(device.runtimeID, property.mSelector, initial: Double(0))
+    }
     public static func bufferIsSettable(_ id: UInt32) -> Bool {
         var property = address(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
         var settable: DarwinBoolean = false

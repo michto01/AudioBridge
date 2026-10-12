@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import AppKit
 import AudioBridgeEngine
 import Foundation
@@ -367,47 +368,47 @@ struct RemoteSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                InfoGroupBox("HTTP API", message: httpHelp) {
+                InfoGroupBox(L("HTTP API"), message: httpHelp) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Toggle("Enable HTTP", isOn: Binding(get: { remote.httpEnabled }, set: { remote.setHTTPRunning($0) }))
+                            Toggle(L("Enable HTTP"), isOn: Binding(get: { remote.httpEnabled }, set: { remote.setHTTPRunning($0) }))
                             Spacer()
-                            Text(remote.httpStatus).foregroundStyle(.secondary)
+                            Text(LT(remote.httpStatus)).foregroundStyle(.secondary)
                         }
                         HStack {
-                            Text("Listen port")
-                            TextField("8765", value: $remote.httpPort, format: .number.grouping(.never)).frame(width: 90)
+                            Text(L("Listen port"))
+                            TextField(L("8765"), value: $remote.httpPort, format: .number.grouping(.never)).frame(width: 90)
                         }
                         Divider()
-                        Text("Bearer token").font(.subheadline.weight(.semibold))
+                        Text(L("Bearer token")).font(.subheadline.weight(.semibold))
                         HStack {
                             Text(remote.token.isEmpty ? "Not generated" : remote.token)
                                 .font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(2)
                             Spacer()
-                            Button("Copy") { remote.copyToken() }.disabled(remote.token.isEmpty)
-                            Button("Regenerate") { remote.regenerateToken() }
+                            Button(L("Copy")) { remote.copyToken() }.disabled(remote.token.isEmpty)
+                            Button(L("Regenerate")) { remote.regenerateToken() }
                         }
                     }
                 }
                 .onChange(of: remote.httpPort) { _, _ in remote.saveSettings() }
-                InfoGroupBox("OSC", message: oscHelp) {
+                InfoGroupBox(L("OSC"), message: oscHelp) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Toggle("Enable OSC", isOn: Binding(get: { remote.oscEnabled }, set: { remote.setOSCRunning($0) }))
+                            Toggle(L("Enable OSC"), isOn: Binding(get: { remote.oscEnabled }, set: { remote.setOSCRunning($0) }))
                             Spacer()
-                            Text(remote.oscStatus).foregroundStyle(.secondary)
+                            Text(LT(remote.oscStatus)).foregroundStyle(.secondary)
                         }
                         HStack {
-                            Text("Listen port")
-                            TextField("9000", value: $remote.oscPort, format: .number.grouping(.never)).frame(width: 90)
+                            Text(L("Listen port"))
+                            TextField(L("9000"), value: $remote.oscPort, format: .number.grouping(.never)).frame(width: 90)
                         }
-                        TextField("Allowed source IPs (comma separated)", text: $remote.allowedOSCAddresses)
+                        TextField(L("Allowed source IPs (comma separated)"), text: $remote.allowedOSCAddresses)
                         Divider()
-                        Text("Companion feedback").font(.subheadline.weight(.semibold))
-                        HStack { Text("Address"); TextField("192.168.1.10", text: $remote.feedbackHost) }
+                        Text(L("Companion feedback")).font(.subheadline.weight(.semibold))
+                        HStack { Text(L("Address")); TextField(L("192.168.1.10"), text: $remote.feedbackHost) }
                         HStack {
-                            Text("Port")
-                            TextField("12321", value: $remote.feedbackPort, format: .number.grouping(.never)).frame(width: 90)
+                            Text(L("Port"))
+                            TextField(L("12321"), value: $remote.feedbackPort, format: .number.grouping(.never)).frame(width: 90)
                         }
                     }
                 }
@@ -419,9 +420,9 @@ struct RemoteSettingsView: View {
         }
     }
     private var httpHelp: String {
-        "The switch starts/stops only HTTP. Settings save automatically. Cycle this switch after changing its port; regenerated tokens take effect immediately.\n\nStatus: GET http://<Mac-IP>:\(remote.httpPort)/api/v1/status\nControl: POST http://<Mac-IP>:\(remote.httpPort)/api/v1/control\nHeader: Authorization: Bearer <token>\n\nStatus includes endpoint names, routing state, linear meter peaks, gains in dB and chain bypass. OutputGain controls digital fallback only; it is rejected when writable device volume is available or its capability check is pending. Status includes outputLevelControl, applied outputGainDB and saved outputFallbackGainDB. Control JSON: {\"command\":\"start\"}, {\"command\":\"stop\"}, {\"command\":\"inputGain\",\"decibels\":-6}, {\"command\":\"outputGain\",\"decibels\":0}, {\"command\":\"chainBypass\",\"bypassed\":true}.\n\nHTTP has no encryption. Use a trusted LAN; macOS firewall/privacy may affect reachability. Tokens are stored in Keychain. No audio is sent.\n\nService report: \(remote.status)"
+        L("The switch starts/stops only HTTP. Settings save automatically. Cycle this switch after changing its port; regenerated tokens take effect immediately.\n\nStatus: GET http://<Mac-IP>:\(remote.httpPort)/api/v1/status\nControl: POST http://<Mac-IP>:\(remote.httpPort)/api/v1/control\nHeader: Authorization: Bearer <token>\n\nStatus includes endpoint names, routing state, linear meter peaks, gains in dB and chain bypass. OutputGain controls digital fallback only; it is rejected when writable device volume is available or its capability check is pending. Status includes outputLevelControl, applied outputGainDB and saved outputFallbackGainDB. Control JSON: {\"command\":\"start\"}, {\"command\":\"stop\"}, {\"command\":\"inputGain\",\"decibels\":-6}, {\"command\":\"outputGain\",\"decibels\":0}, {\"command\":\"chainBypass\",\"bypassed\":true}.\n\nHTTP has no encryption. Use a trusted LAN; macOS firewall/privacy may affect reachability. Tokens are stored in Keychain. No audio is sent.\n\nService report: \(remote.status)")
     }
     private var oscHelp: String {
-        "The switch starts/stops only OSC. Settings save automatically. Cycle this switch after changing its port or Companion destination; allowlist edits take effect immediately. Commands are accepted only from exact allowlisted source IPs.\n\nCommands: /audiobridge/start, /audiobridge/stop (no arguments); /audiobridge/input/gain, /audiobridge/output/gain (float dB); /audiobridge/effects/bypass (integer 0 or 1).\n\nFeedback is sent every second to Companion: /audiobridge/status (string), /audiobridge/running (integer), /audiobridge/input/left, /audiobridge/input/right, /audiobridge/output/left, /audiobridge/output/right (float linear peaks).\n\nOSC has no cryptographic authentication. Use a trusted LAN. macOS firewall and Local Network privacy can affect delivery. No audio is sent.\n\nService report: \(remote.status)"
+        L("The switch starts/stops only OSC. Settings save automatically. Cycle this switch after changing its port or Companion destination; allowlist edits take effect immediately. Commands are accepted only from exact allowlisted source IPs.\n\nCommands: /audiobridge/start, /audiobridge/stop (no arguments); /audiobridge/input/gain, /audiobridge/output/gain (float dB); /audiobridge/effects/bypass (integer 0 or 1).\n\nFeedback is sent every second to Companion: /audiobridge/status (string), /audiobridge/running (integer), /audiobridge/input/left, /audiobridge/input/right, /audiobridge/output/left, /audiobridge/output/right (float linear peaks).\n\nOSC has no cryptographic authentication. Use a trusted LAN. macOS firewall and Local Network privacy can affect delivery. No audio is sent.\n\nService report: \(remote.status)")
     }
 }

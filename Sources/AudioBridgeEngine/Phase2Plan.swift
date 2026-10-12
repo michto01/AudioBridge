@@ -26,7 +26,7 @@ public struct Phase2Plan: Sendable {
     public let prefill: UInt32
     public let auBlockFrames: UInt32
 
-    public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced, bufferFrames: UInt32? = nil) throws {
+    public init(selection: RouteSelection, devices: [DeviceFacts], profile: BufferProfile = .balanced, bufferFrames: UInt32? = nil, auFrames: UInt32? = nil) throws {
         if let issue = selection.issue(in: devices, direction: .input) { throw PlanError(issue) }
         if let issue = selection.issue(in: devices, direction: .output) { throw PlanError(issue) }
         input = try Self.endpoint(selection.input, direction: .input, devices: devices)
@@ -48,7 +48,12 @@ public struct Phase2Plan: Sendable {
         }
         // Avoid waiting for multiple small device callbacks merely because the
         // bridge reserve is larger. Preserve the existing 16–256-frame bounds.
-        auBlockFrames = try AUBlockSizing.frames(startupFill: min(prefill, largestBuffer))
+        let automatic = try AUBlockSizing.frames(startupFill: min(prefill, largestBuffer))
+        let block = auFrames ?? automatic
+        guard block >= 16, block <= 1024, block & (block - 1) == 0, block <= prefill else {
+            throw PlanError("AU blocks must be a power of two from 16 to 1024 frames and no larger than the FIFO reserve.")
+        }
+        auBlockFrames = block
         // Storage headroom, not another fill target. Only occupied frames add
         // queue delay; AU input/output each receive this bounded capacity.
         var size: UInt32 = 1024

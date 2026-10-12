@@ -18,6 +18,23 @@ ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *transport);
 bool ABAUTransportStopped(const ABAUTransport *transport);
 uint64_t ABAUTransportProcessedFrames(const ABAUTransport *transport);
 typedef struct {
+    uint64_t identity, blocks, nanoseconds, maximumNanoseconds, overBudget;
+} ABAUStageMetrics;
+typedef struct {
+    uint64_t sequence, lostFrames, lastRenderNanoseconds, lastWakeNanoseconds;
+    uint32_t captureFrames, readyFrames, inFlightFrames;
+    int32_t renderingStage; // -1: transfer/idle; 0...7: plugin slot.
+} ABAUStarvationMetrics;
+ABAUStageMetrics ABAUTransportStageMetrics(const ABAUTransport *transport, uint32_t index);
+ABAUStarvationMetrics ABAUTransportStarvation(const ABAUTransport *transport);
+// One writer per domain: render thread for stage timing, output callback for losses.
+uint64_t ABAUTransportBeginStage(ABAUTransport *transport, uint32_t index, uint64_t identity);
+void ABAUTransportEndStage(ABAUTransport *transport, uint32_t index, uint64_t start);
+void ABAUTransportRecordStarvation(ABAUTransport *transport, uint32_t lostFrames);
+void ABAUTransportLatencyChanged(ABAUTransport *transport);
+bool ABAUTransportTakeLatencyChange(ABAUTransport *transport);
+bool ABAUTransportMoving(const ABAUTransport *transport);
+typedef struct {
     uint32_t inputFrames, outputFrames, pendingFrames;
     uint64_t heartbeat, processedFrames;
     int32_t fault;
@@ -27,7 +44,8 @@ typedef struct {
     uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
     uint64_t blockBudgetNanoseconds, renderOverBudgetBlocks;
     uint64_t workerWaits, workerLateWakeups, maxWorkerWakeLatenessNanoseconds;
-    int32_t schedulingStatus;
+    int32_t schedulingStatus, workgroupStatus;
+    uint64_t workgroupIntervalFailures;
 } ABAUTransportMetrics;
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity);
 const char *ABAUTransportLastError(void);
@@ -55,6 +73,9 @@ bool ABAUTransportWaitForBlock(ABAUTransport *transport, uint32_t frames);
 // Invoke on the dedicated render thread once; returns Mach status, exposed
 // in diagnostics. No workgroup membership or deadline guarantee is implied.
 int32_t ABAUTransportConfigureRealtimeThread(ABAUTransport *transport);
+void ABAUTransportFinishRealtimeThread(ABAUTransport *transport);
+// Borrowed only on the helper render thread; never sent across shared memory.
+const void *ABAUTransportWorkgroup(const ABAUTransport *transport);
 // Deterministic accounting entry points allow tests without sleeping/plugins.
 void ABAUTransportRecordWorkerWait(ABAUTransport *transport, uint64_t requestedNanoseconds, uint64_t elapsedNanoseconds);
 void ABAUTransportRecordRenderDuration(ABAUTransport *transport, uint64_t durationNanoseconds);

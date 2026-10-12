@@ -12,6 +12,8 @@
 #include <mach/mach.h>
 #include <mach/thread_policy.h>
 #include <semaphore.h>
+#include <AudioToolbox/AudioToolbox.h>
+#include <os/workgroup.h>
 
 static _Thread_local char transport_error[256];
 const char *ABAUTransportLastError(void) { return transport_error; }
@@ -19,13 +21,14 @@ static void failure(const char *operation, int code) {
     snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
 }
 
-#define AB_SHARED_VERSION 6
+#define AB_SHARED_VERSION 7
 uint32_t ABAUTransportProtocolVersion(void) { return AB_SHARED_VERSION; }
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
+typedef struct { _Atomic uint64_t identity, blocks, total, maximum, overBudget; } StageTiming;
 typedef struct {
     uint32_t version, capacity;
-    _Atomic bool ready, stopped, bypass, effectsProcessingEnabled;
+    _Atomic bool ready, stopped, bypass, effectsProcessingEnabled, latencyChanged;
     _Atomic int32_t fault;
     _Atomic uint32_t latency;
     _Atomic uint64_t heartbeat, processedFrames;
@@ -36,10 +39,22 @@ typedef struct {
     _Atomic bool workerWaiting;
     _Atomic uint32_t workerBlockFrames;
     _Atomic uint64_t workerSignalTime;
-    _Atomic int32_t schedulingStatus;
+    _Atomic int32_t schedulingStatus, workgroupStatus;
+    _Atomic uint64_t workgroupIntervalFailures;
+    _Atomic int32_t renderingStage;
+    _Atomic uint64_t lastWakeNanoseconds;
+    StageTiming stages[8];
+    _Atomic uint64_t lossSequence, lostFrames, lossRender, lossWake;
+    _Atomic uint32_t lossCapture, lossReady, lossInFlight;
+    _Atomic int32_t lossStage;
     SharedRing input, output;
 } Shared;
-struct ABAUTransport { Shared *shared; char name[32], eventName[32]; sem_t *event; bool owner; mach_timebase_info_data_t timebase; };
+struct ABAUTransport { Shared *shared; char name[32], eventName[32]; sem_t *event; bool owner; mach_timebase_info_data_t timebase;
+    os_workgroup_interval_t workgroup;
+    os_workgroup_join_token_s joinToken;
+    uint64_t budgetTicks;
+    bool joined, intervalActive;
+};
 
 static bool valid_atomics(Shared *s) {
     return atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
@@ -53,6 +68,8 @@ static bool valid_atomics(Shared *s) {
         && atomic_is_lock_free(&s->maxWorkerWakeLatenessNanoseconds)
         && atomic_is_lock_free(&s->workerWaiting) && atomic_is_lock_free(&s->workerBlockFrames)
         && atomic_is_lock_free(&s->workerSignalTime) && atomic_is_lock_free(&s->schedulingStatus)
+        && atomic_is_lock_free(&s->renderingStage) && atomic_is_lock_free(&s->lossSequence)
+        && atomic_is_lock_free(&s->stages[0].blocks) && atomic_is_lock_free(&s->lossCapture)
         && atomic_is_lock_free(&s->input.write) && atomic_is_lock_free(&s->output.read);
 }
 static ABAUTransport *map_transport(const char *name, bool create, uint32_t capacity) {
@@ -74,7 +91,7 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
     if (create) {
         memset(s, 0, sizeof(*s)); s->version = AB_SHARED_VERSION; s->capacity = capacity;
         atomic_init(&s->ready, false); atomic_init(&s->stopped, false); atomic_init(&s->fault, 0);
-        atomic_init(&s->bypass, false);
+        atomic_init(&s->bypass, false); atomic_init(&s->latencyChanged, false);
         atomic_init(&s->effectsProcessingEnabled, true);
         atomic_init(&s->latency, 0); atomic_init(&s->heartbeat, 0); atomic_init(&s->processedFrames, 0);
         atomic_init(&s->inFlightFrames, 0); atomic_init(&s->renderBlocks, 0);
@@ -83,6 +100,16 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
         atomic_init(&s->workerWaits, 0); atomic_init(&s->workerLateWakeups, 0); atomic_init(&s->maxWorkerWakeLatenessNanoseconds, 0);
         atomic_init(&s->workerWaiting, false); atomic_init(&s->workerBlockFrames, 0);
         atomic_init(&s->workerSignalTime, 0); atomic_init(&s->schedulingStatus, -1);
+        atomic_init(&s->workgroupStatus, -1); atomic_init(&s->workgroupIntervalFailures, 0);
+        atomic_init(&s->renderingStage, -1); atomic_init(&s->lastWakeNanoseconds, 0);
+        atomic_init(&s->lossSequence, 0); atomic_init(&s->lostFrames, 0);
+        atomic_init(&s->lossRender, 0); atomic_init(&s->lossWake, 0);
+        atomic_init(&s->lossCapture, 0); atomic_init(&s->lossReady, 0);
+        atomic_init(&s->lossInFlight, 0); atomic_init(&s->lossStage, -1);
+        for (uint32_t i = 0; i < 8; i++) {
+            atomic_init(&s->stages[i].identity, 0); atomic_init(&s->stages[i].blocks, 0); atomic_init(&s->stages[i].total, 0);
+            atomic_init(&s->stages[i].maximum, 0); atomic_init(&s->stages[i].overBudget, 0);
+        }
         atomic_init(&s->input.write, 0); atomic_init(&s->input.read, 0);
         atomic_init(&s->output.write, 0); atomic_init(&s->output.read, 0);
     }
@@ -229,6 +256,19 @@ int32_t ABAUTransportConfigureRealtimeThread(ABAUTransport *t) {
         mach_port_deallocate(mach_task_self(), thread);
     }
     atomic_store_explicit(&t->shared->schedulingStatus, status, memory_order_release);
+    t->budgetTicks = ticks;
+    // This worker renders ahead through bounded queues, independently of both
+    // device IOProcs. Use Apple's asynchronous audio workgroup, not either
+    // device's parallel group. Setup is complete before parent starts HAL.
+    int groupStatus = status == KERN_SUCCESS ? ENOMEM : EPERM;
+    if (status == KERN_SUCCESS) {
+        t->workgroup = AudioWorkIntervalCreate("AudioBridge AU processing", OS_CLOCK_MACH_ABSOLUTE_TIME, NULL);
+        if (t->workgroup) {
+            groupStatus = os_workgroup_join((os_workgroup_t)t->workgroup, &t->joinToken);
+            t->joined = groupStatus == 0;
+        }
+    }
+    atomic_store_explicit(&t->shared->workgroupStatus, groupStatus, memory_order_release);
     return status;
 }
 static uint32_t pending_frames(const Shared *s) {
@@ -238,7 +278,7 @@ static uint32_t pending_frames(const Shared *s) {
     uint32_t consumed = atomic_load_explicit(&s->output.read, memory_order_acquire);
     uint32_t captured = atomic_load_explicit(&s->input.write, memory_order_acquire);
     uint32_t pending = captured - consumed;
-    uint32_t limit = s->capacity * 2 + 256;
+    uint32_t limit = s->capacity * 2 + 1024;
     return pending > limit ? limit : pending; // Third-party UI snapshots may span consumption.
 }
 ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *t) {
@@ -250,6 +290,8 @@ ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *t) {
 }
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     const Shared *s = t->shared; ABAUTransportMetrics result = {0};
+    result.workgroupStatus = atomic_load_explicit(&s->workgroupStatus, memory_order_acquire);
+    result.workgroupIntervalFailures = atomic_load_explicit(&s->workgroupIntervalFailures, memory_order_relaxed);
     result.ready = atomic_load_explicit(&s->ready, memory_order_acquire);
     result.stopped = atomic_load_explicit(&s->stopped, memory_order_acquire);
     result.bypassed = atomic_load_explicit(&s->bypass, memory_order_acquire);
@@ -276,9 +318,20 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
 }
 uint64_t ABAUTransportBeginBlock(ABAUTransport *t, uint32_t frames) {
     atomic_store_explicit(&t->shared->inFlightFrames, frames, memory_order_relaxed);
-    return mach_absolute_time();
+    uint64_t start = mach_absolute_time();
+    if (t->joined) {
+        int result = os_workgroup_interval_start(t->workgroup, start, start + t->budgetTicks, NULL);
+        t->intervalActive = result == 0;
+        if (result) atomic_fetch_add_explicit(&t->shared->workgroupIntervalFailures, 1, memory_order_relaxed);
+    }
+    return start;
 }
 void ABAUTransportEndBlock(ABAUTransport *t, uint64_t start) {
+    if (t->intervalActive) {
+        int result = os_workgroup_interval_finish(t->workgroup, NULL);
+        if (result) atomic_fetch_add_explicit(&t->shared->workgroupIntervalFailures, 1, memory_order_relaxed);
+        t->intervalActive = false;
+    }
     uint64_t duration = (uint64_t)((long double)(mach_absolute_time() - start) * t->timebase.numer / t->timebase.denom);
     ABAUTransportRecordRenderDuration(t, duration);
     atomic_store_explicit(&t->shared->inFlightFrames, 0, memory_order_relaxed);
@@ -300,10 +353,94 @@ void ABAUTransportRecordRenderDuration(ABAUTransport *t, uint64_t duration) {
 void ABAUTransportRecordWorkerWait(ABAUTransport *t, uint64_t requested, uint64_t elapsed) {
     Shared *s = t->shared;
     uint64_t lateness = elapsed > requested ? elapsed - requested : 0;
+    atomic_store_explicit(&s->lastWakeNanoseconds, lateness, memory_order_relaxed);
     atomic_fetch_add_explicit(&s->workerWaits, 1, memory_order_relaxed);
     if (lateness > atomic_load_explicit(&s->maxWorkerWakeLatenessNanoseconds, memory_order_relaxed))
         atomic_store_explicit(&s->maxWorkerWakeLatenessNanoseconds, lateness, memory_order_relaxed);
     uint64_t budget = atomic_load_explicit(&s->blockBudgetNanoseconds, memory_order_relaxed);
     if (budget && lateness > budget)
         atomic_fetch_add_explicit(&s->workerLateWakeups, 1, memory_order_relaxed);
+}
+
+// Host musical-position callbacks only need these three atomics, not a UI snapshot.
+bool ABAUTransportMoving(const ABAUTransport *t) {
+    const Shared *s = t->shared;
+    return atomic_load_explicit(&s->ready, memory_order_acquire)
+        && !atomic_load_explicit(&s->stopped, memory_order_acquire)
+        && !atomic_load_explicit(&s->fault, memory_order_acquire);
+}
+uint64_t ABAUTransportBeginStage(ABAUTransport *t, uint32_t index, uint64_t identity) {
+    if (index >= 8) return mach_absolute_time();
+    StageTiming *stage = &t->shared->stages[index];
+    if (atomic_load_explicit(&stage->identity, memory_order_relaxed) != identity) {
+        atomic_store(&stage->identity, 0); // Suppress attribution during replacement.
+        atomic_store(&stage->blocks, 0); atomic_store(&stage->total, 0);
+        atomic_store(&stage->maximum, 0); atomic_store(&stage->overBudget, 0);
+        atomic_store_explicit(&stage->identity, identity, memory_order_release);
+    }
+    atomic_store_explicit(&t->shared->renderingStage, (int32_t)index, memory_order_relaxed);
+    return mach_absolute_time();
+}
+void ABAUTransportEndStage(ABAUTransport *t, uint32_t index, uint64_t start) {
+    if (index >= 8) return;
+    uint64_t duration = (uint64_t)((long double)(mach_absolute_time() - start) * t->timebase.numer / t->timebase.denom);
+    StageTiming *stage = &t->shared->stages[index];
+    atomic_fetch_add_explicit(&stage->blocks, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&stage->total, duration, memory_order_relaxed);
+    if (duration > atomic_load_explicit(&stage->maximum, memory_order_relaxed))
+        atomic_store_explicit(&stage->maximum, duration, memory_order_relaxed);
+    if (duration > atomic_load_explicit(&t->shared->blockBudgetNanoseconds, memory_order_relaxed))
+        atomic_fetch_add_explicit(&stage->overBudget, 1, memory_order_relaxed);
+    atomic_store_explicit(&t->shared->renderingStage, -1, memory_order_relaxed);
+}
+ABAUStageMetrics ABAUTransportStageMetrics(const ABAUTransport *t, uint32_t index) {
+    if (index >= 8) return (ABAUStageMetrics){0};
+    const StageTiming *stage = &t->shared->stages[index];
+    uint64_t identity = atomic_load_explicit(&stage->identity, memory_order_acquire);
+    ABAUStageMetrics result = { identity, atomic_load(&stage->blocks), atomic_load(&stage->total),
+        atomic_load(&stage->maximum), atomic_load(&stage->overBudget) };
+    return identity == atomic_load_explicit(&stage->identity, memory_order_acquire) ? result : (ABAUStageMetrics){0};
+}
+void ABAUTransportRecordStarvation(ABAUTransport *t, uint32_t lost) {
+    // Latest bounded event, not a log. All payload fields are atomic: the
+    // lifecycle reader can overlap without racing or making HAL wait.
+    Shared *s = t->shared;
+    atomic_fetch_add_explicit(&s->lossSequence, 1, memory_order_seq_cst);
+    atomic_store_explicit(&s->lostFrames, lost, memory_order_seq_cst);
+    atomic_store_explicit(&s->lossCapture, available(&s->input, s->capacity), memory_order_seq_cst);
+    atomic_store_explicit(&s->lossReady, available(&s->output, s->capacity), memory_order_seq_cst);
+    atomic_store_explicit(&s->lossInFlight, atomic_load(&s->inFlightFrames), memory_order_seq_cst);
+    atomic_store_explicit(&s->lossStage, atomic_load(&s->renderingStage), memory_order_seq_cst);
+    atomic_store_explicit(&s->lossRender, atomic_load(&s->lastRenderNanoseconds), memory_order_seq_cst);
+    atomic_store_explicit(&s->lossWake, atomic_load(&s->lastWakeNanoseconds), memory_order_seq_cst);
+    atomic_fetch_add_explicit(&s->lossSequence, 1, memory_order_seq_cst);
+}
+ABAUStarvationMetrics ABAUTransportStarvation(const ABAUTransport *t) {
+    const Shared *s = t->shared;
+    uint64_t sequence = atomic_load_explicit(&s->lossSequence, memory_order_seq_cst);
+    if (sequence & 1) return (ABAUStarvationMetrics){0};
+    ABAUStarvationMetrics event = { .sequence = sequence / 2,
+        .lostFrames = atomic_load(&s->lostFrames), .captureFrames = atomic_load(&s->lossCapture),
+        .readyFrames = atomic_load(&s->lossReady), .inFlightFrames = atomic_load(&s->lossInFlight),
+        .renderingStage = atomic_load(&s->lossStage), .lastRenderNanoseconds = atomic_load(&s->lossRender),
+        .lastWakeNanoseconds = atomic_load(&s->lossWake) };
+    return sequence == atomic_load_explicit(&s->lossSequence, memory_order_seq_cst) ? event : (ABAUStarvationMetrics){0};
+}
+
+void ABAUTransportLatencyChanged(ABAUTransport *t) {
+    atomic_store_explicit(&t->shared->latencyChanged, true, memory_order_release);
+}
+bool ABAUTransportTakeLatencyChange(ABAUTransport *t) {
+    return atomic_exchange_explicit(&t->shared->latencyChanged, false, memory_order_acq_rel);
+}
+
+const void *ABAUTransportWorkgroup(const ABAUTransport *t) {
+    return t->joined ? t->workgroup : NULL;
+}
+void ABAUTransportFinishRealtimeThread(ABAUTransport *t) {
+    // Must run on the same dedicated thread that joined, after its last block.
+    if (t->intervalActive) { int result = os_workgroup_interval_finish(t->workgroup, NULL); (void)result; }
+    if (t->joined) os_workgroup_leave((os_workgroup_t)t->workgroup, &t->joinToken);
+    if (t->workgroup) os_release(t->workgroup);
+    t->intervalActive = false; t->joined = false; t->workgroup = NULL;
 }

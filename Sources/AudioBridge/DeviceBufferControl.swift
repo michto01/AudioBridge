@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import AudioBridgeCore
 import SwiftUI
 
@@ -14,27 +15,27 @@ struct DeviceBufferControl: View {
                 let lower = Int(ceil(range.minimum)), upper = Int(floor(range.maximum))
                 if upper >= lower {
                     HStack {
-                        Text("Interface buffer")
+                        Text(L("Interface buffer"))
                         let common = BufferFrameChoices.common.filter { $0 >= lower && $0 <= upper }
-                        Picker("Size", selection: Binding(get: { custom || !common.contains(requested) ? 0 : requested }, set: {
+                        Picker(L("Size"), selection: Binding(get: { custom || !common.contains(requested) ? 0 : requested }, set: {
                             custom = $0 == 0
                             if $0 != 0 { requested = $0; model.setDeviceBufferDraft(uid: device.uid, frames: UInt32($0)) }
                         })) {
-                            ForEach(common, id: \.self) { Text("\($0) frames").tag($0) }
-                            Text("Custom…").tag(0)
+                            ForEach(common, id: \.self) { Text(L("\($0) frames")).tag($0) }
+                            Text(L("Custom…")).tag(0)
                         }.labelsHidden()
                         if custom || !common.contains(requested) {
-                            TextField("Frames", value: Binding(get: { requested }, set: {
+                            TextField(L("Frames"), value: Binding(get: { requested }, set: {
                                 requested = $0
                                 if let frames = UInt32(exactly: $0) { model.setDeviceBufferDraft(uid: device.uid, frames: frames) }
                             }), format: .number.grouping(.never)).frame(width: 75)
                         }
                     }.disabled(!model.canEditSelections)
-                    ReadoutRow("Current buffer", "\(device.bufferFrames.map(String.init) ?? "Unknown") frames")
+                    ReadoutRow(L("Current buffer"), L("\(device.bufferFrames.map(String.init) ?? "Unknown") frames"))
                         .font(.caption)
                 }
             } else {
-                ReadoutRow("Interface buffer", "Read-only / unavailable").font(.caption)
+                ReadoutRow(L("Interface buffer"), L("Read-only / unavailable")).font(.caption)
             }
         }
         .onAppear { readCurrent() }

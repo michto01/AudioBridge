@@ -1,3 +1,4 @@
+import AudioBridgeAUViews
 import AppKit
 import AudioBridgeAU
 import AudioBridgeRealtime
@@ -36,6 +37,11 @@ func restore(_ effect: AUEffect, unit: AUAudioUnit) throws {
     }
 }
 
+/// The mapping outlives the renderer; the observer invokes only a C atomic store.
+private struct LatencySignal: @unchecked Sendable {
+    let transport: OpaquePointer
+    func mark() { ABAUTransportLatencyChanged(transport) }
+}
 final class PullSource {
     var samples: UnsafeMutablePointer<Float>
     let frames: UInt32
@@ -61,12 +67,17 @@ final class Stage {
     let wrapper: AVAudioUnit
     let unit: AUAudioUnit
     let render: AURenderBlock
+    let timingIdentity: UInt64
     let pull: PullSource
+    let pullBlock: AURenderPullInputBlock
+    let contextObserver: UnsafeMutableRawPointer?
+    var latencyObservation: NSKeyValueObservation?
     init(effect: AUEffect, wrapper: AVAudioUnit, input: UnsafeMutablePointer<Float>, frames: UInt32) {
-        self.effect = effect; self.wrapper = wrapper
+        self.effect = effect; self.wrapper = wrapper; timingIdentity = effect.timingIdentity
         let unit = wrapper.auAudioUnit
         self.unit = unit; render = unit.renderBlock; pull = PullSource(samples: input, frames: frames)
-        _ = pull.block // Cache before render resources / processing.
+        contextObserver = ABCreateRenderContextObserver(unit)
+        pullBlock = pull.block // No lazy getter or new closure on render thread.
     }
 }
 
@@ -91,7 +102,7 @@ final class Renderer: @unchecked Sendable {
         list = AudioBufferList.allocate(maximumBuffers: 2); list.unsafeMutablePointer.pointee.mNumberBuffers = 2
     }
     @MainActor func prepare(request: AUWorkerRequest) async throws {
-        guard request.sampleRate.isFinite, request.sampleRate > 0, frames >= 16, frames <= 256,
+        guard request.sampleRate.isFinite, request.sampleRate > 0, frames >= 16, frames <= 1024,
               frames & (frames - 1) == 0,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: request.sampleRate, channels: 2, interleaved: false) else {
             throw AUError("Invalid helper processing format.")
@@ -124,15 +135,19 @@ final class Renderer: @unchecked Sendable {
             // Capture only the mapping, which outlives every stage; no renderer cycle.
             let transport = self.transport
             unit.transportStateBlock = { flags, position, cycleStart, cycleEnd in
-                let state = ABAUTransportSnapshot(transport)
-                flags?.pointee = state.ready && !state.stopped && state.fault == 0 ? .moving : []
-                position?.pointee = Double(state.processedFrames)
+                flags?.pointee = ABAUTransportMoving(transport) ? .moving : []
+                position?.pointee = Double(ABAUTransportProcessedFrames(transport))
                 cycleStart?.pointee = 0
                 cycleEnd?.pointee = 0
                 return true
             }
-            let stage = Stage(effect: effect, wrapper: wrapper, input: first, frames: frames)
             try unit.allocateRenderResources()
+            // Cache render/pull blocks after the unit has its processing resources.
+            let stage = Stage(effect: effect, wrapper: wrapper, input: first, frames: frames)
+            let signal = LatencySignal(transport: transport)
+            stage.latencyObservation = unit.observe(\.latency, options: [.new]) { _, _ in
+                signal.mark()
+            }
             stages.append(stage)
             guard unit.latency.isFinite, unit.latency >= 0 else { throw AUError("Invalid plugin latency.") }
             if effect.enabled { latency += unit.latency }
@@ -140,6 +155,12 @@ final class Renderer: @unchecked Sendable {
         }
         guard latency.isFinite, latency < Double(Float.greatestFiniteMagnitude) else { throw AUError("Invalid chain latency.") }
         latencySeconds = Float(latency)
+    }
+    func installRenderContext() {
+        let group = ABAUTransportWorkgroup(transport)
+        for stage in stages {
+            if let observer = stage.contextObserver { ABApplyRenderContextObserver(observer, group) }
+        }
     }
     func processBlock(bypass: Bool = false, effectsProcessingEnabled: Bool = true) -> Bool {
         let count = Int(frames), bytes = UInt32(count * MemoryLayout<Float>.size)
@@ -162,14 +183,17 @@ final class Renderer: @unchecked Sendable {
             var timestamp = AudioTimeStamp()
             timestamp.mSampleTime = Double(ABAUTransportProcessedFrames(transport))
             timestamp.mFlags = .sampleTimeValid
-            for stage in stages {
+            for index in stages.indices {
+                let stage = stages[index]
                 stage.pull.samples = input
                 for lane in 0..<2 {
                     list[lane] = AudioBuffer(mNumberChannels: 1, mDataByteSize: bytes, mData: output.advanced(by: lane * count))
                     memset(list[lane].mData, 0, Int(bytes))
                 }
                 var flags = AudioUnitRenderActionFlags()
-                let status = stage.render(&flags, &timestamp, frames, 0, list.unsafeMutablePointer, stage.pull.block)
+                let stageStart = ABAUTransportBeginStage(transport, UInt32(index), stage.timingIdentity)
+                let status = stage.render(&flags, &timestamp, frames, 0, list.unsafeMutablePointer, stage.pullBlock)
+                ABAUTransportEndStage(transport, UInt32(index), stageStart)
                 guard status == noErr else { fail(status); return false }
                 guard list.unsafeMutablePointer.pointee.mNumberBuffers == 2 else { fail(kAudioUnitErr_FormatNotSupported); return false }
                 for lane in 0..<2 {
@@ -189,8 +213,9 @@ final class Renderer: @unchecked Sendable {
         return true
     }
     @MainActor func refreshLatency() {
-        // Read legacy and modern AU reports outside rendering, including while
-        // an editor command is pending. Some AUv2 units omit KVO notifications.
+        // Notification-driven reads, on AppKit's thread. Never query plugin
+        // properties periodically while DSP is busy. Legacy units that omit
+        // KVO are refreshed when their editor closes.
         var total: Double = 0
         for stage in stages {
             let latency = stage.unit.latency
@@ -208,7 +233,11 @@ final class Renderer: @unchecked Sendable {
     }
     func fail(_ status: OSStatus) { ABAUTransportFault(transport, status) }
     deinit {
-        for stage in stages { stage.unit.deallocateRenderResources() }
+        for stage in stages {
+            stage.latencyObservation?.invalidate()
+            if let observer = stage.contextObserver { ABDestroyRenderContextObserver(observer) }
+            stage.unit.deallocateRenderResources()
+        }
         scratch.deallocate(); first.deallocate(); second.deallocate(); list.unsafeMutablePointer.deallocate()
     }
 }

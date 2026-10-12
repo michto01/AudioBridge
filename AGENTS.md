@@ -11,7 +11,7 @@ You are implementing a **native macOS 14+ SwiftUI menu-bar audio bridge**. Read 
 - Auto-start on login after first-time explicit configuration; manual Stop persists and overrides retries.
 - N×2 input mix, stereo AU/drift processing and physical output fan-out (ADR-002), smooth gain, stereo meters, no silence notifications. Mono/stereo presets remain simple defaults.
 - Independently clocked input/output require actual drift compensation; do not claim a plain FIFO solves clock drift.
-- Indefinite recovery from recoverable faults with bounded retry backoff. Permission/configuration faults require action, not retry storms.
+- Device loss/identity/format/buffer changes and confirmed callback stalls require explicit local re-arming under ADR-003 (0.6 user amendment). Other recoverable faults retain bounded retry backoff. Permission/configuration faults require action, not retry storms.
 - No audio recording, network transport or cloud service. User explicitly authorized installed third-party AU effect hosting on 2026-10-11; other extra DSP remains outside scope.
 
 ## Engineering practices

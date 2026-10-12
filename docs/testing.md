@@ -1,5 +1,8 @@
 # Test strategy
 
+Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+
+
 ## Test layers
 
 1. **Pure unit tests**: matrix math, gain conversion/ramping, PCM layout conversions, ring buffer wraparound/overrun/underrun, resampler controller stability, schema migrations and retry policy.
@@ -66,3 +69,7 @@ For each test record: test ID, OS/architecture, input/output UID and format, bui
 `StereoRoutingTests.swift` adds N×2 summation/headroom, duplicate/invalid patches, backed-up v1 migration (including duplicate-channel sums), missing physical indices, multi-stream planar/interleaved addressing, C stereo fan-out/Off silence and local status classification. These sources have not been compiled or run. Add coherent live-publication/ramp stress tests, malformed/null/unequal-frame buffer lists, and nonfinite physical capture before the gate.
 
 Manual acceptance: mono and stereo defaults; more than two inputs; duplicated L/R output pairs; explicit mono and headroom; Aggregate Device subdevice clock configuration; actual physical numbering; live connect/disconnect/gain; state after relaunch; AU before/after mixing placement; Copy status after a fault; visible menu colours and VoiceOver. Validate CPU, latency, drift, callbacks and partial device/layout changes on stated hardware. Earlier historical test results do not pass this extension.
+
+## 0.6 reliability acceptance
+
+Use the comparison matrix, queue/wake/lifetime cases, explicit re-arm checks and 12-hour gate in [0.6 results](release-0.6-results.md#deferred-06-acceptance). Direct, empty-helper, loaded-DSP-off, individual active plugins and full-chain runs must use equal measurement windows and identical device/reserve settings. No execution is implied by this checklist.

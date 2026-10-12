@@ -116,6 +116,12 @@ capacity/reserve and startup filling are explicit. See [real-time scheduling
 results](realtime-scheduling-results.md). Audio workgroups, runtime scheduling,
 CPU comparisons and Phase 5 operational acceptance remain pending.
 
+## 0.6 — Audio reliability revision (current review gate)
+
+User authorized this slice on 2026-10-12. [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) records device-loss stop/re-arm semantics and operator setup. Version 0.6.0/build 33 implements lifetime/reporting repairs, asynchronous AU workgroup/context integration, notification-driven latency refresh, plugin/stall telemetry, explicit AU blocks, shared Simple configuration, retained Expert controls and English/Czech localization. See [implementation, commands and pending acceptance](release-0.6-results.md).
+
+Gate: deterministic queue/wake/ownership checks, device drop/re-arm checks, plugin isolation comparisons at 128 input / 32 output / 128 reserve, physical loopback latency and a 12-hour run with bounded queues and no lost frames. All runtime/test gates remain pending. Build/signature checks do not complete the gate. Stop for review; no distribution or unattended readiness claim.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

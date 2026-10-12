@@ -1,6 +1,6 @@
 import Foundation
 
-public enum BridgeFailureKind: String, Sendable { case recoverable, actionRequired, unsafeTeardown }
+public enum BridgeFailureKind: String, Sendable { case recoverable, deviceLost, actionRequired, unsafeTeardown }
 public struct BridgeFailure: Error, LocalizedError, Sendable {
     public let message: String
     public let kind: BridgeFailureKind
@@ -22,6 +22,7 @@ public struct RecoveryPolicy: Sendable {
     public mutating func attempting(now: Double) { lastAttempt = now; retryAt = nil }
     public mutating func failed(_ kind: BridgeFailureKind, now: Double) {
         guard desired else { return }
+        if kind == .deviceLost { stop(); return }
         if kind != .recoverable { blocked = true; retryAt = nil; return }
         let delays: [Double] = [1, 2, 4, 8, 16, 30]
         retryAt = now + delays[min(attempts, delays.count - 1)]

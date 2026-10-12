@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import AudioBridgeCore
 import AudioBridgeEngine
 import SwiftUI
@@ -14,8 +15,8 @@ struct InfoButton: View {
             .popover(isPresented: $showing, arrowEdge: .top) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(title).font(.headline)
-                        Text(message).font(.body).fontWeight(.regular).fixedSize(horizontal: false, vertical: true)
+                        Text(LT(title)).font(.headline)
+                        Text(LT(message)).font(.body).fontWeight(.regular).fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
                 }.frame(width: 380, height: popoverHeight)
@@ -50,11 +51,11 @@ struct SignalMeters: View {
                 let level = levels?[lane]
                 let db = level?.decibels ?? -.infinity
                 HStack(spacing: 8) {
-                    Text("Mix \(lane == 0 ? "L" : "R")")
+                    Text(L("Mix \(lane == 0 ? "L" : "R")"))
                         .font(.caption).frame(width: 44, alignment: .leading)
                     MeterBar(fraction: fresh ? min(1, max(0, (displayedDB[lane] + 60) / 60)) : 0)
                         .frame(height: 8)
-                    Text(fresh ? (db.isFinite ? String(format: "%.0f dB", db) : "−∞ dB") : "Inactive")
+                    Text(fresh ? (db.isFinite ? String(format: L("%.0f dB"), db) : L("−∞ dB")) : LT("Inactive"))
                         .font(.caption.monospacedDigit()).frame(width: 70, alignment: .trailing)
                     Text(fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date()) ? "CLIP" : "")
                         .font(.caption.bold()).foregroundStyle(.red).frame(width: 32)
@@ -78,7 +79,7 @@ struct SignalMeters: View {
                 displayedDB = [-60, -60]
             }
         }
-        .help("Audio-buffer peaks sampled approximately five times per second for display. Health transitions appear immediately. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
+        .help(L("Audio-buffer peaks sampled approximately five times per second for display. Health transitions appear immediately. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers."))
     }
 }
 
@@ -106,7 +107,7 @@ private final class NativeMeterBar: NSView {
         fillMask.anchorPoint = CGPoint(x: 0, y: 0.5)
         gradient.mask = fillMask; layer?.addSublayer(gradient)
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    required init?(coder: NSCoder) { fatalError(L("init(coder:) has not been implemented")) }
     convenience init() { self.init(frame: .zero) }
     override func layout() {
         super.layout()
@@ -148,57 +149,57 @@ struct BufferSettings: View {
         telemetry = model.telemetry
     }
     var body: some View {
-        InfoGroupBox("Bridge FIFO reserve", message: "This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start.\n\nRefill waits for this reserve plus one output callback and FIR lookahead. Smaller reserves reduce queue delay but leave less time for Audio Units and scheduler delays. If delivery losses increase, stop and raise the reserve. The driver buffers remain separate. Expert presets and exact values are available below; the valid minimum follows the larger device buffer, at least 16 frames. Actual delay is shown in Bridge.") {
+        InfoGroupBox(L("Bridge FIFO reserve"), message: L("This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start.\n\nRefill waits for this reserve plus one output callback and FIR lookahead. Smaller reserves reduce queue delay but leave less time for Audio Units and scheduler delays. If delivery losses increase, stop and raise the reserve. The driver buffers remain separate. Expert presets and exact values are available below; the valid minimum follows the larger device buffer, at least 16 frames. Actual delay is shown in Bridge.")) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     let common = BufferFrameChoices.common.filter { $0 >= Int(model.bufferMinimum) && $0 <= Int(model.bufferMaximum) }
-                    Picker("Queue reserve", selection: Binding(get: {
+                    Picker(L("Queue reserve"), selection: Binding(get: {
                         custom || !common.contains(Int(model.selectedBufferFrames)) ? 0 : Int(model.selectedBufferFrames)
                     }, set: {
                         custom = $0 == 0
                         if $0 != 0 { model.setBufferFrames(UInt32($0)) }
                     })) {
-                        ForEach(common, id: \.self) { Text("\($0) frames").tag($0) }
-                        Text("Custom…").tag(0)
+                        ForEach(common, id: \.self) { Text(L("\($0) frames")).tag($0) }
+                        Text(L("Custom…")).tag(0)
                     }.disabled(!model.canEditSelections)
                     if custom || !common.contains(Int(model.selectedBufferFrames)) {
-                        TextField("Frames", value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
+                        TextField(L("Frames"), value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
                             if $0 >= Int(model.bufferMinimum), $0 <= Int(model.bufferMaximum) { model.setBufferFrames(UInt32($0)) }
                         }), format: .number.grouping(.never)).frame(width: 90).disabled(!model.canEditSelections)
                     }
                     if model.showDebugInformation {
-                        Text("\(model.selectedBufferFrames) frames").font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
+                        Text(L("\(model.selectedBufferFrames) frames")).font(.caption.monospacedDigit()).frame(width: 105, alignment: .trailing)
                     }
                 }
                 if model.showDebugInformation {
                 HStack {
-                    Text("\(model.bufferMinimum)–\(model.bufferMaximum) frames").font(.caption).foregroundStyle(.secondary)
+                    Text(L("\(model.bufferMinimum)–\(model.bufferMaximum) frames")).font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     if let rate = model.routePlan?.sampleRate {
-                        Text("\((Double(model.selectedBufferFrames) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms queue reserve")
+                        Text(L("\((Double(model.selectedBufferFrames) / rate * 1000).formatted(.number.precision(.fractionLength(1)))) ms queue reserve"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 }
-                DisclosureGroup("Expert", isExpanded: $expert) {
+                DisclosureGroup(L("Expert"), isExpanded: $expert) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Exact frames")
-                            TextField("Frames", value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
+                            Text(L("Exact frames"))
+                            TextField(L("Frames"), value: Binding(get: { Int(model.selectedBufferFrames) }, set: {
                                 if $0 >= Int(model.bufferMinimum), $0 <= Int(model.bufferMaximum) { model.setBufferFrames(UInt32($0)) }
                             }), format: .number.grouping(.never)).frame(width: 90)
-                            Picker("Preset", selection: Binding(get: { model.bufferProfile }, set: { model.setBufferProfile($0) })) {
+                            Picker(L("Preset"), selection: Binding(get: { model.bufferProfile }, set: { model.setBufferProfile($0) })) {
                                 ForEach(BufferProfile.allCases, id: \.self) { Text($0.title).tag($0) }
                             }
-                            Button("Apply preset") { model.setBufferProfile(model.bufferProfile) }
+                            Button(L("Apply preset")) { model.setBufferProfile(model.bufferProfile) }
                         }.disabled(!model.canEditSelections)
                     }.padding(.top, 4)
                 }
                 if model.showDebugInformation, model.routingRequested, let metrics = telemetry.snapshot {
                     Divider()
-                    ReadoutRow("Ready audio / allocated capacity", "\(metrics.bufferedFrames) / \(metrics.capacity) frames").font(.caption)
-                    ReadoutRow("Correction command", "\(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm").font(.caption)
-                    ReadoutRow("Underrun / overrun frames", "\(metrics.underrunFrames) / \(metrics.overrunFrames)").font(.caption)
+                    ReadoutRow(L("Ready audio / allocated capacity"), L("\(metrics.bufferedFrames) / \(metrics.capacity) frames")).font(.caption)
+                    ReadoutRow(L("Correction command"), L("\(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm")).font(.caption)
+                    ReadoutRow(L("Underrun / overrun frames"), L("\(metrics.underrunFrames) / \(metrics.overrunFrames)")).font(.caption)
                 }
             }.padding(4)
         }
@@ -214,17 +215,17 @@ struct GainControl: View {
     }
     var body: some View {
         HStack {
-            Text(direction == .input ? "Input trim" : "Output gain").font(.caption).frame(width: 80, alignment: .leading)
+            Text(LT(direction == .input ? L("Input trim") : L("Output gain"))).font(.caption).frame(width: 80, alignment: .leading)
             Slider(value: binding, in: GainSettings.range)
-                .accessibilityLabel(direction == .input ? "Input trim in decibels" : "Output gain in decibels")
+                .accessibilityLabel(direction == .input ? L("Input trim in decibels") : L("Output gain in decibels"))
             GainEntry(value: binding, range: GainSettings.range)
                 .frame(width: 65)
-                .accessibilityLabel("Exact gain in decibels")
-            Text("dB").font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel(L("Exact gain in decibels"))
+            Text(L("dB")).font(.caption).foregroundStyle(.secondary)
             Button { model.setGain(0, direction: direction) } label: { Image(systemName: "arrow.uturn.backward") }
-                .help("Reset to 0 dB")
+                .help(L("Reset to 0 dB"))
         }
-        .help("Digital gain, −60 to +12 dB. Both stereo channels change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged.")
+        .help(L("Digital gain, −60 to +12 dB. Both stereo channels change together with a 20 ms ramp. Input gain cannot undo clipping already present at capture. Device volume is unchanged."))
     }
 }
 
@@ -238,27 +239,27 @@ struct OutputDeviceVolumeControl: View {
         VStack(alignment: .leading, spacing: 4) {
             if model.outputDeviceVolumeLoading {
                 HStack {
-                    Text("Output level").font(.caption).frame(width: 80, alignment: .leading)
+                    Text(L("Output level")).font(.caption).frame(width: 80, alignment: .leading)
                     ProgressView().controlSize(.small)
-                    Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                    Text(L("Checking…")).font(.caption).foregroundStyle(.secondary)
                 }
             } else if model.outputDeviceVolumeWritable {
                 HStack(spacing: 8) {
-                    Text("Device volume").font(.caption).frame(width: 80, alignment: .leading)
+                    Text(L("Device volume")).font(.caption).frame(width: 80, alignment: .leading)
                     Slider(value: volume, in: 0...1)
-                        .accessibilityLabel("Selected output device volume")
-                    Text(model.outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
+                        .accessibilityLabel(L("Selected output device volume"))
+                    Text(model.outputDeviceVolume.map { L("\(Int(($0 * 100).rounded()))%") } ?? "—")
                         .font(.caption.monospacedDigit()).frame(width: 42, alignment: .trailing)
                 }
             } else {
                 if allowsDigitalFallback { GainControl(model: model, direction: .output) }
                 HStack {
-                    Text(allowsDigitalFallback ? "Digital fallback" : "Device volume unavailable").font(.caption).foregroundStyle(.secondary)
-                    InfoButton(title: "Output level", message: (model.outputDeviceVolumeError ?? "This output does not expose a writable master volume control.") + "\n\nDigital output gain is the fallback in the Bridge tab. It changes the stereo signal smoothly before physical output mapping. When writable device volume is available, digital gain is fixed at 0 dB; the saved fallback setting is retained for devices without volume control.")
+                    Text(allowsDigitalFallback ? L("Digital fallback") : L("Device volume unavailable")).font(.caption).foregroundStyle(.secondary)
+                    InfoButton(title: L("Output level"), message: (model.outputDeviceVolumeError ?? L("This output does not expose a writable master volume control.")) + L("\n\nDigital output gain is the fallback in the Bridge tab. It changes the stereo signal smoothly before physical output mapping. When writable device volume is available, digital gain is fixed at 0 dB; the saved fallback setting is retained for devices without volume control."))
                 }
             }
         }
-        .help("Uses selected-device volume when writable, otherwise digital gain in Bridge. Device volume may affect other audio clients and may be rounded by the driver.")
+        .help(L("Uses selected-device volume when writable, otherwise digital gain in Bridge. Device volume may affect other audio clients and may be rounded by the driver."))
     }
 }
 
@@ -269,13 +270,13 @@ struct GainEntry: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
     var body: some View {
-        TextField("Gain", text: $draft)
+        TextField(L("Gain"), text: $draft)
             .textFieldStyle(.roundedBorder).focused($focused)
             .onAppear { refresh() }
             .onChange(of: value) { _, _ in if !focused { refresh() } }
             .onChange(of: focused) { _, active in if !active { commit() } }
             .onSubmit { commit(); focused = false }
-            .help("Enter a value, then press Return or leave the field to apply.")
+            .help(L("Enter a value, then press Return or leave the field to apply."))
     }
     private func refresh() { draft = value.formatted(.number.grouping(.never).precision(.fractionLength(0))) }
     private func commit() {

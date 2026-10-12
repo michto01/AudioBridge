@@ -1,0 +1,27 @@
+# ADR-003: Device safety latch and operator setup for 0.6
+
+Status: Accepted by the operator on 2026-10-12.
+
+## Context
+
+Periodic AU-path losses and high CPU have not been attributed to a specific plugin or host stage. Volunteer operation needs a clear stop on device failure, intentional re-arming, simple setup and Czech/English controls. Earlier automatic device reconnection is inappropriate for this requested safety policy.
+
+## Decision
+
+- Device disappearance, identity/topology/rate/buffer change and confirmed callback stalls stop the explicit route and persist a re-arm latch and stopped intent. Reconnect and relaunch cannot resume it. The operator checks the route and confirms Re-arm in Bridge. Remote Start cannot clear the latch. No alternative UID or physical channel is substituted.
+- Native device-error notifications are opt-in in General, with explicit OS authorization; the in-app error is always available. Unsafe teardown retains callback memory, persists stopped intent and requires restarting the process before a fresh re-arm. A driver Stop error after confirmed detach is reported separately.
+- The asynchronous, queued AU render worker uses its own AudioWorkIntervalCreate workgroup. It retains the signaled SPSC queues and dedicated thread; it does not join either independently clocked device's parallel workgroup. Supporting plugins receive the cached render-context observer on the actual render thread. Setup/interval failures are diagnostics with fallback, never a deadline guarantee.
+- Cache AU render and pull blocks after resource allocation. Periodic AU latency property reads are replaced by KVO-driven refresh; legacy units are also refreshed on editor close. Missing legacy notifications can leave latency estimates stale while the editor is open; no periodic property-query fallback is added.
+- AU blocks are explicit in Expert: Automatic or 16/32/64/128/256/512/1024 frames, configured before resource allocation and no larger than the FIFO reserve. Automatic remains bounded at 256 and follows the larger device buffer. Plugin rejection is an actionable error; blocks are not silently padded or changed.
+- Simple exposes one shared nominal rate and hardware-buffer request. Rates are filtered by reported endpoint capabilities; writes are explicit, stopped and device-wide. Both driver readbacks must match before Start. Partial changes remain visible and are not silently rolled back or hidden. Balanced FIFO reserve and automatic AU block sizing are used. Existing configured users retain Expert; new configurations default to Simple. Expert retains independent buffer drafts and saved FIFO/AU choices.
+- General offers English/Czech. Operator captions, explanations and host editor controls translate. Device/plugin names, vendor editor UIs and raw driver errors remain supplied text. Copy Status and remote contracts remain English.
+
+## Consequences and acceptance
+
+This supersedes automatic device-loss reconnection in the original overview/architecture/Phase 4 contract. Recovery of other typed recoverable faults retains capped backoff. No vendor-specific audio handling, independent nominal-rate conversion, routing expansion or recording is introduced.
+
+Per-plugin wall timing and a bounded latest-starvation snapshot provide evidence, not proof of causality. Low latency and long-run reliability require matched comparisons, loopback and soak acceptance. See [0.6 results](../release-0.6-results.md). No Phase 5 operational gate is passed by this decision.
+
+## Primary guidance
+
+[Apple asynchronous audio workgroups](https://developer.apple.com/documentation/audiotoolbox/adding-asynchronous-real-time-threads-to-audio-workgroups), [AudioWorkIntervalCreate](https://developer.apple.com/documentation/audiotoolbox/audioworkintervalcreate), [cached AU render blocks](https://developer.apple.com/documentation/audiotoolbox/auaudiounit/renderblock) and [maximum frames](https://developer.apple.com/documentation/audiotoolbox/auaudiounit/maximumframestorender). No third-party package is required.

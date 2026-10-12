@@ -27,6 +27,8 @@ final class RenderDriver: @unchecked Sendable {
     }
     func run() {
         _ = ABAUTransportConfigureRealtimeThread(transport)
+        defer { ABAUTransportFinishRealtimeThread(transport) }
+        autoreleasepool { current.installRenderContext() }
         // Parent starts HAL only after the actual render thread is scheduled
         // and has finished its policy setup, rather than after Thread.start().
         ABAUTransportReady(transport, initialLatency)
@@ -34,6 +36,7 @@ final class RenderDriver: @unchecked Sendable {
             guard ABAUTransportWaitForBlock(transport, current.frames) else { return }
             if let pointer = ABRendererExchangeTake(exchange) {
                 current = Unmanaged<Renderer>.fromOpaque(pointer).takeUnretainedValue()
+                autoreleasepool { current.installRenderContext() }
                 ABAUTransportSetLatency(transport, current.latencySeconds)
                 ABRendererExchangeAcknowledge(exchange, pointer)
             }
@@ -98,12 +101,13 @@ final class LiveHost {
             renderer = next; pendingRenderer = nil; pendingReplacementID = nil
             reply(AULiveResponse(id: id))
         }
-        if ABAUTransportEffectsProcessingEnabled(transport) { renderer.refreshLatency() }
+        if pendingRenderer == nil, ABAUTransportTakeLatencyChange(transport) { renderer.refreshLatency() }
         Editor.setChainBypassed(ABAUTransportBypassed(transport))
         Editor.setEffectsProcessingEnabled(ABAUTransportEffectsProcessingEnabled(transport))
         let close = directory.appendingPathComponent("close-editor")
         if FileManager.default.fileExists(atPath: close.path) {
             try? FileManager.default.removeItem(at: close); Editor.closeLive()
+            ABAUTransportLatencyChanged(transport)
         }
         let commandURL = directory.appendingPathComponent("command.json")
         guard !busy, let data = try? Data(contentsOf: commandURL),
@@ -123,6 +127,7 @@ final class LiveHost {
             }
             Editor.showLive(effect: stage.effect, wrapper: stage.wrapper, bypassed: ABAUTransportBypassed(transport),
                 effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(transport)) { [weak self] effect, error in
+                if let self { ABAUTransportLatencyChanged(self.transport) }
                 self?.reply(AULiveResponse(id: command.id, effect: effect, error: error))
             }
             return

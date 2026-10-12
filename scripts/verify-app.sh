@@ -14,10 +14,17 @@ check CFBundleExecutable AudioBridge
 check CFBundlePackageType APPL
 check LSMinimumSystemVersion 14.0
 check LSUIElement true
-check CFBundleShortVersionString 0.5.9
-check CFBundleVersion 32
+check CFBundleShortVersionString 0.6.0
+check CFBundleVersion 33
 check CFBundleIconFile AudioBridge.icns
 [[ -s "$APP/Contents/Resources/AudioBridge.icns" ]]
+for LANGUAGE in en cs; do
+  RESOURCE_ROOT="$APP/Contents/Resources/AudioBridge_AudioBridgeStrings.bundle"
+  STRINGS="$RESOURCE_ROOT/Contents/Resources/$LANGUAGE.lproj/Localizable.strings"
+  [[ -s "$STRINGS" ]] || STRINGS="$RESOURCE_ROOT/$LANGUAGE.lproj/Localizable.strings"
+  [[ -s "$STRINGS" ]] || { echo "Missing interface language: $LANGUAGE" >&2; exit 1; }
+  plutil -lint "$STRINGS"
+done
 DESCRIPTION="$(/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$PLIST")"
 [[ -n "$DESCRIPTION" ]]
 LOCAL_NETWORK_DESCRIPTION="$(/usr/libexec/PlistBuddy -c "Print :NSLocalNetworkUsageDescription" "$PLIST")"

@@ -64,3 +64,7 @@ The HTTP parser accepts one bounded request per connection (16 KiB maximum) and 
 ## Acceptance status
 
 Source compiled locally, but no HTTP/OSC packet, Companion integration, firewall/privacy prompt or remote control was exercised. See `docs/ui-remote-control-results.md`.
+
+## 0.6 device safety latch
+
+Status adds `requiresRearm` (boolean). After device loss/change/stall, local re-arm confirmation is required; HTTP/OSC Start cannot clear it. HTTP reports a control error; OSC command rejection appears in the service report. Remote Stop preserves the latch. Protocol names and status strings remain English even with a Czech operator interface.

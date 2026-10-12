@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import SwiftUI
 
 /// One consistent home for each group's explanatory text.
@@ -17,7 +18,7 @@ struct InfoGroupBox<Content: View>: View {
             content
         } label: {
             HStack {
-                Text(title).accessibilityAddTraits(.isHeader)
+                Text(LT(title)).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 InfoButton(title: title, message: message)
             }
@@ -50,9 +51,9 @@ struct ReadoutRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 20) {
-            Text(title).foregroundStyle(.secondary)
+            Text(LT(title)).foregroundStyle(.secondary)
             Spacer(minLength: 4)
-            Text(value).monospacedDigit().multilineTextAlignment(.trailing)
+            Text(LT(value)).monospacedDigit().multilineTextAlignment(.trailing)
         }
         .accessibilityElement(children: .combine)
     }

@@ -23,6 +23,12 @@ public struct AUEffect: Codable, Identifiable, Equatable, Sendable {
         id = UUID(); self.identity = identity; self.name = name; enabled = true; state = nil
     }
 }
+extension AUEffect {
+    /// Stable diagnostic identity; never use Swift's process-randomized Hasher.
+    public var timingIdentity: UInt64 {
+        id.uuidString.utf8.reduce(UInt64(14695981039346656037)) { ($0 ^ UInt64($1)) &* 1099511628211 }
+    }
+}
 public struct AUChain: Codable, Equatable, Sendable {
     public var schemaVersion = 1
     public var effects: [AUEffect] = []

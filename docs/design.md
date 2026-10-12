@@ -1,5 +1,8 @@
 # Design / UX specification
 
+Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+
+
 ## Visual direction
 
 Native macOS controls, compact spacing, restrained status colors, no dashboard clutter. Use system materials and SF Symbols. Follow system light/dark appearance and accessibility settings. Status must not be color-only.

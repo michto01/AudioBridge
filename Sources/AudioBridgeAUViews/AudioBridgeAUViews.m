@@ -29,3 +29,25 @@ NSView *ABCreateCocoaEditor(AudioUnit unit, NSSize size) {
     free(info);
     return view;
 }
+
+@interface ABRenderContextObserver : NSObject
+@property(nonatomic, copy) AURenderContextObserver callback;
+@end
+@implementation ABRenderContextObserver
+@end
+void *ABCreateRenderContextObserver(AUAudioUnit *unit) {
+    AURenderContextObserver callback = unit.renderContextObserver;
+    if (!callback) return NULL;
+    ABRenderContextObserver *observer = [ABRenderContextObserver new];
+    observer.callback = callback;
+    return (__bridge_retained void *)observer;
+}
+void ABApplyRenderContextObserver(void *pointer, const void *workgroup) {
+    ABRenderContextObserver *observer = (__bridge ABRenderContextObserver *)pointer;
+    AudioUnitRenderContext context = {0};
+    context.workgroup = (__bridge os_workgroup_t)workgroup;
+    observer.callback(&context);
+}
+void ABDestroyRenderContextObserver(void *observer) {
+    CFRelease(observer);
+}

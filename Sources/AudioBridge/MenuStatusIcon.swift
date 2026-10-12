@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import AppKit
 import AudioBridgeCore
 import SwiftUI
@@ -42,7 +43,7 @@ struct RoutingStatusLabel: View {
     @ObservedObject var model: AppModel
     var body: some View {
         Label {
-            Text(model.status)
+            Text(LT(model.status))
         } icon: {
             Image(systemName: model.activity == .actionRequired ? "exclamationmark.circle.fill" : "circle.fill")
                 .foregroundStyle(MenuStatusIcon.color(model.activity))

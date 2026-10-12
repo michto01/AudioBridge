@@ -1,5 +1,8 @@
 # Overview — Audio Bridge
 
+Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+
+
 ## Problem
 
 Audio Bridge is a universal native macOS utility for unattended routing between independently selected Core Audio input and output devices, which may use different hardware clocks. Version 1 supports N physical inputs mixed into stereo, a stereo AU/drift path and L/R fan-out within one selected output device (ADR-002). Built-in, USB, Thunderbolt, and virtual PCM devices are eligible based on capabilities; no hardware brand or transport is required.

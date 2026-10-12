@@ -232,10 +232,10 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
     AudioBufferList *output, const AudioTimeStamp *outputTime, void *context) {
     (void)device; (void)now; (void)output; (void)outputTime;
     ABEngine *engine = context;
-    record_clock_rate(engine, inputTime, true);
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
     if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
         uint32_t frames;
+        record_clock_rate(engine, inputTime, true);
         atomic_fetch_add_explicit(&engine->inputCallbacks, 1, memory_order_relaxed);
         if (ABRoutingFrames(engine->routing, input, true, &frames) && frames <= engine->scratchFrames) {
             uint64_t faults = 0, rawL = 0, rawR = 0;
@@ -263,10 +263,10 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
     AudioBufferList *output, const AudioTimeStamp *outputTime, void *context) {
     (void)device; (void)now; (void)input; (void)inputTime;
     ABEngine *engine = context;
-    record_clock_rate(engine, outputTime, false);
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
     // HAL supplies zeroed output buffers (AudioHardware.h). Unselected lanes remain untouched.
     if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
+        record_clock_rate(engine, outputTime, false);
         atomic_fetch_add_explicit(&engine->outputCallbacks, 1, memory_order_relaxed);
         uint32_t frames;
         if (ABRoutingFrames(engine->routing, output, false, &frames) && frames <= engine->scratchFrames) {
@@ -327,6 +327,7 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 levels = ABMeasureStereo(engine->outputScratch, frames);
                 atomic_fetch_add_explicit(&engine->outputFrames, read, memory_order_relaxed);
                 atomic_fetch_add_explicit(&engine->underrunFrames, frames - read, memory_order_relaxed);
+                if (engine->au && read < frames) ABAUTransportRecordStarvation(engine->au, frames - read);
                 if (read < frames || ABResamplerStarved(engine->resampler)) {
                     atomic_store_explicit(&engine->primed, false, memory_order_release);
                     atomic_fetch_add_explicit(&engine->rebufferEvents, 1, memory_order_relaxed);

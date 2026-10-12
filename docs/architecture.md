@@ -1,5 +1,8 @@
 # Architecture
 
+Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+
+
 ## User-authorized Audio Unit extension
 
 Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. N×2 physical input mixing and input trim precede the chain; stereo adaptive drift processing and output gain follow it, then physical output fan-out (ADR-002). The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed/stalled helpers detach the engine; typed recoverable failures retry with bounded backoff while explicit render/configuration failures require action. Hardware acceptance remains pending. See [Phase 4 evidence](phase-4-results.md).
@@ -49,7 +52,7 @@ Current implementation uses pure `RecoveryPolicy` for desired state, blocked sta
 `stopped` (manual), `waitingForInput`, `waitingForOutput`, `preparing`, `running`, `degraded`, `recovering`, `faulted` (unrecoverable configuration or permission). Model desired state separately from observed state. Both devices absent must be represented unambiguously in a diagnostic reason.
 
 - Start requested: resolve both UIDs; missing device → wait; permission denied → actionable fault; devices present → prepare/start.
-- Device disappears or invalidates stream: detach safely; silence output if possible; transition to recovery; re-resolve by UID.
+- Device disappears, changes identity/format/buffer or stops callbacks: detach safely, latch stopped intent and require explicit local re-arming (ADR-003); never substitute another UID.
 - Reappearance: re-query capabilities and rebuild from scratch if necessary.
 - Recoverable error: retry 1, 2, 4, 8, 16, 30, 30… seconds (with notification-driven immediate recheck); never busy-loop.
 - Manual Stop: clear desired routing, cancel scheduled retries and prevent reconnection-triggered restart. Persist preference before acknowledging Stop.

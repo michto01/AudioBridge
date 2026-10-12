@@ -71,11 +71,10 @@ destination.write_bytes(struct.pack(">4sI", b"icns", len(chunks) + 8) + chunks)
 PY
 fi
 [[ -s "$ICON" ]] || { echo "Unable to create AudioBridge.icns" >&2; exit 1; }
-# SwiftPM resource bundles, if introduced later, belong beside the executable.
-for RESOURCE in "$BINARY_DIR"/*.bundle; do
-  [[ -d "$RESOURCE" ]] || continue
-  cp -R "$RESOURCE" "$STAGE/AudioBridge.app/Contents/MacOS/"
-done
+# SwiftPM Bundle.module resolves resource bundles from the app resourceURL.
+RESOURCE="$BINARY_DIR/AudioBridge_AudioBridgeStrings.bundle"
+[[ -d "$RESOURCE" ]] || { echo "Missing operator-language resources: $RESOURCE" >&2; exit 1; }
+cp -R "$RESOURCE" "$STAGE/AudioBridge.app/Contents/Resources/"
 plutil -lint "$STAGE/AudioBridge.app/Contents/Info.plist"
 rm -rf "$DEST"
 mv "$STAGE/AudioBridge.app" "$DEST"

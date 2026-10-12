@@ -1,3 +1,4 @@
+import AudioBridgeStrings
 import AppKit
 import AVFAudio
 import AudioBridgeAUViews
@@ -62,9 +63,9 @@ final class Editor: NSObject, NSWindowDelegate {
     private func open() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        self.window = window; window.delegate = self; window.title = "\(effect.name) — AU editor"
+        self.window = window; window.delegate = self; window.title = L("\(effect.name) — AU editor")
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: Text("Loading effect…").padding())
+        window.contentView = NSHostingView(rootView: Text(L("Loading effect…")).padding())
         window.center(); window.makeKeyAndOrderFront(nil); NSApplication.shared.activate(ignoringOtherApps: true)
         if let wrapper { install(wrapper); return }
         loadTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
@@ -145,15 +146,15 @@ private struct EffectEditor: View {
             HStack {
                 Text(unit.audioUnitName ?? "Audio Unit").font(.headline)
                 Spacer()
-                Button(live ? "Close and save" : "Save settings") { save() }
-                if !live { Button("Cancel") { NSApplication.shared.terminate(nil) } }
+                Button(LT(live ? "Close and save" : "Save settings")) { save() }
+                if !live { Button(L("Cancel")) { NSApplication.shared.terminate(nil) } }
             }
-            Text(live ? "Controls affect the running effect immediately. Close saves settings." : "Changes apply on the next Start.").font(.caption).foregroundStyle(.secondary)
+            Text(LT(live ? "Controls affect the running effect immediately. Close saves settings." : "Changes apply on the next Start.")).font(.caption).foregroundStyle(.secondary)
             if !bypassStatus.effectsProcessingEnabled {
-                Label("Effect processing off — dry audio; plugin signal meters are paused.", systemImage: "pause.circle")
+                Label(L("Effect processing off — dry audio; plugin signal meters are paused."), systemImage: "pause.circle")
                     .font(.caption).foregroundStyle(.orange)
             } else if bypassStatus.bypassed {
-                Label("Chain bypassed — you can edit settings; output uses dry audio.", systemImage: "arrow.triangle.branch")
+                Label(L("Chain bypassed — you can edit settings; output uses dry audio."), systemImage: "arrow.triangle.branch")
                     .font(.caption).foregroundStyle(.orange)
             }
             if let legacy {
@@ -179,7 +180,7 @@ private struct EffectEditor: View {
                             ParameterControl(parameter: parameter)
                         }
                         if unit.parameterTree?.allParameters.isEmpty != false {
-                            Text("No generic parameters exposed. The plugin may require its own editor.")
+                            Text(L("No generic parameters exposed. The plugin may require its own editor."))
                         }
                     }.padding(4)
                 }

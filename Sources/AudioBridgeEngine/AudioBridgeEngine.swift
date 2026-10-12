@@ -57,6 +57,10 @@ public struct EngineSnapshot: Sendable {
     public let auWorkerLateWakeups: UInt64
     public let auMaxWorkerWakeLatenessNanoseconds: UInt64
     public let auSchedulingStatus: Int32?
+    public let auWorkgroupStatus: Int32?
+    public let auWorkgroupIntervalFailures: UInt64
+    public let auStages: [AUStageTiming]
+    public let auStarvation: ABAUStarvationMetrics?
     public let delayInputDevice: DeviceFacts
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
@@ -66,6 +70,11 @@ public struct EngineSnapshot: Sendable {
     public let recentGlitches: Bool
     public let glitchCleanSeconds: Double
     public let deliveryWarningReason: String?
+}
+
+public struct AUStageTiming: Sendable {
+    public let slot: Int
+    public let identity, blocks, nanoseconds, maximumNanoseconds, overBudget: UInt64
 }
 
 public struct MeterLevel: Sendable {
@@ -110,7 +119,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, effectsProcessingEnabled: Bool = true, exclusiveAccess: Bool = false,
+                      bufferFrames: UInt32? = nil, auFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, effectsProcessingEnabled: Bool = true, exclusiveAccess: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -124,9 +133,9 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 failureKind = .actionRequired
                 if fresh.devices.first(where: { $0.uid == selection.input.uid })?.alive != true
                     || fresh.devices.first(where: { $0.uid == selection.output.uid })?.alive != true {
-                    failureKind = .recoverable
+                    failureKind = .deviceLost
                 }
-                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames)
+                let next = try Phase2Plan(selection: selection, devices: fresh.devices, profile: profile, bufferFrames: bufferFrames, auFrames: effectsProcessingEnabled ? auFrames : nil)
                 guard let created = ABEngineCreate(next.input.device.runtimeID, next.output.device.runtimeID,
                     next.capacity, next.prefill) else {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
@@ -155,12 +164,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                         let deviceName = exclusiveFailureDevice == 1 ? next.input.device.name : next.output.device.name
                         let direction = exclusiveFailureDevice == 1 ? "input" : "output"
                         let cleanup = stopOnQueue()
-                        failureKind = cleanup == nil ? .actionRequired : .unsafeTeardown
+                        failureKind = context == nil ? .actionRequired : .unsafeTeardown
                         throw Phase2Plan.PlanError("Exclusive access could not be acquired for the selected \(direction) device ‘\(deviceName)’. The device may not support hog mode or another app may own it. Close the competing app or turn off exclusive access in Settings → Audio. \(cleanup ?? "")")
                     }
                     failureKind = .recoverable
                     let cleanup = stopOnQueue()
-                    if cleanup != nil { failureKind = .unsafeTeardown }
+                    if context != nil { failureKind = .unsafeTeardown }
                     throw Phase2Plan.PlanError("Unable to start the selected devices (OSStatus \(status)). \(cleanup ?? "")")
                 }
                 startedAt = Date(); previousInputCallbacks = 0; previousOutputCallbacks = 0
@@ -177,14 +186,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             } catch {
                 let cleanup = stopOnQueue()
                 completion(.failure(BridgeFailure(error.localizedDescription + (cleanup.map { " \($0)" } ?? ""),
-                    kind: cleanup == nil ? ((error as? BridgeFailure)?.kind ?? failureKind) : .unsafeTeardown)))
+                    kind: context == nil ? ((error as? BridgeFailure)?.kind ?? failureKind) : .unsafeTeardown)))
             }
         }
     }
     public func stop(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = true; preparationLock.unlock()
         queue.async { [self] in
-            if let error = stopOnQueue() { completion(.failure(Phase2Plan.PlanError(error))) }
+            if let error = stopOnQueue() { completion(.failure(BridgeFailure(error, kind: context == nil ? .actionRequired : .unsafeTeardown))) }
             else { completion(.success(())) }
         }
     }
@@ -271,7 +280,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         if let auFault = auHost?.fault() { fault = auFault.message; faultKind = auFault.kind }
         if fault == nil, metrics.formatFaults > 0 {
             fault = "Audio buffer layout changed or became invalid. Refresh devices and start again."
-            faultKind = metrics.layoutFaults > 0 ? .recoverable : .actionRequired
+            faultKind = metrics.layoutFaults > 0 ? .deviceLost : .actionRequired
         }
         else if fault == nil, elapsed > 5 && ((lastInputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
             || (lastOutputActivity.map { now.timeIntervalSince($0) > 2 } ?? true)
@@ -281,11 +290,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 lastOutputActivity.map { now.timeIntervalSince($0) <= 2 } == true ? nil : "output callbacks",
                 metrics.primed ? nil : "processed startup buffer"
             ].compactMap { $0 }.joined(separator: ", ")
+            if !inputActive || !outputActive { faultKind = .deviceLost }
             fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auHost?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
         // Stop safely on change; the supervisor re-resolves the same UIDs for retry.
-        if fault == nil, Date().timeIntervalSince(lastDeviceCheck) >= 0.5 {
+        if now.timeIntervalSince(lastDeviceCheck) >= 0.5 {
           lastDeviceCheck = Date()
           do {
             let fresh = try CoreAudioCatalog.snapshot(selectedUIDs: [plan.input.device.uid, plan.output.device.uid])
@@ -297,11 +307,19 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 || output?.output.matchesRoutingTopology(plan.output.device.output) != true
                 || input?.bufferFrames != plan.input.device.bufferFrames || output?.bufferFrames != plan.output.device.bufferFrames
                 || input?.nominalSampleRate != plan.sampleRate || output?.nominalSampleRate != plan.sampleRate {
-                fault = "A selected device or its format changed. Routing stopped without choosing another device."
+                let missing = [("input", input, plan.input.device), ("output", output, plan.output.device)]
+                    .filter { $0.1?.alive != true || $0.1?.runtimeID != $0.2.runtimeID }
+                fault = missing.isEmpty
+                    ? "A selected device's format or buffer changed. Routing stopped. Check the configuration before re-arming."
+                    : "Selected " + missing.map { "\($0.0) device ‘\($0.2.name)’" }.joined(separator: " and ")
+                        + " disconnected or changed identity. Routing stopped. Reconnect and check the route before re-arming."
+                faultKind = .deviceLost
             } else {
                 delayInputDevice = input; delayOutputDevice = output
             }
-          } catch { fault = "Device recheck failed: \(error.localizedDescription)" }
+          } catch {
+              if fault == nil { fault = "Device recheck failed: \(error.localizedDescription)" }
+          }
         }
         let auMetrics = auHost?.metrics
         let auLatency = auMetrics?.latencySeconds ?? 0
@@ -322,7 +340,6 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             unhealthyReason: unhealthyReason,
             counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
                 formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
-        if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)"; faultKind = .unsafeTeardown }
         // Keep the 20 Hz watchdog and loss accounting, but format/publish UI
         // snapshots only at 5 Hz. Faults, delivery transitions and AU replies
         // bypass throttling so supervision/control never waits on UI cadence.
@@ -331,7 +348,25 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             inputActive: inputActive, outputActive: outputActive,
             warning: recentGlitches.active, responseID: auResponse?.id)
         guard fault != nil || telemetryState != lastTelemetryState || telemetryTime - lastTelemetryTime >= 0.2 else { return }
-        lastTelemetryState = telemetryState; lastTelemetryTime = telemetryTime
+        let exclusiveMask = ABEngineExclusiveAccessMask(context)
+        let usesAU = auHost != nil
+        let stageTimings: [AUStageTiming] = auHost?.transport.map { transport in
+                (0..<8).compactMap { index -> AUStageTiming? in
+                    let timing = ABAUTransportStageMetrics(transport, UInt32(index))
+                    return timing.blocks == 0 ? nil : AUStageTiming(slot: index + 1, identity: timing.identity, blocks: timing.blocks,
+                        nanoseconds: timing.nanoseconds, maximumNanoseconds: timing.maximumNanoseconds, overBudget: timing.overBudget)
+                }
+            } ?? []
+        let starvation = auHost?.transport.map { ABAUTransportStarvation($0) }
+        // Snapshot all C/shared values before teardown. The local context is
+        // invalid after a successful stop; final fault reporting cannot use it.
+        if let reason = fault, let cleanup = stopOnQueue() {
+            fault = "\(reason) \(cleanup)"
+            if self.context != nil { faultKind = .unsafeTeardown }
+        }
+        lastTelemetryState = TelemetryState(fault: fault, primed: metrics.primed,
+            inputActive: inputActive, outputActive: outputActive, warning: recentGlitches.active, responseID: auResponse?.id)
+        lastTelemetryTime = telemetryTime
         let snapshot = EngineSnapshot(inputCallbacks: metrics.inputCallbacks, outputCallbacks: metrics.outputCallbacks,
             inputFrames: metrics.inputFrames, outputFrames: metrics.outputFrames,
             underrunFrames: metrics.underrunFrames, overrunFrames: metrics.overrunFrames,
@@ -355,7 +390,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,
             captureQueueFrames: auMetrics?.inputFrames ?? 0, pendingSourceFrames: auMetrics?.pendingFrames ?? metrics.bufferedFrames,
             processedQueueFrames: auMetrics?.outputFrames ?? 0,
-            auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: auHost == nil ? 0 : plan.auBlockFrames,
+            auInFlightFrames: auMetrics?.inFlightFrames ?? 0, auBlockFrames: usesAU ? plan.auBlockFrames : 0,
             resamplerLookaheadFrames: ABResamplerLookahead(), queueLowFrames: queueLowFrames, queueHighFrames: queueHighFrames,
             auRenderBlocks: auMetrics?.renderBlocks ?? 0, auRenderNanoseconds: auMetrics?.renderNanoseconds ?? 0,
             auLastRenderNanoseconds: auMetrics?.lastRenderNanoseconds ?? 0, auMaxRenderNanoseconds: auMetrics?.maxRenderNanoseconds ?? 0,
@@ -364,10 +399,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auWorkerWaits: auMetrics?.workerWaits ?? 0, auWorkerLateWakeups: auMetrics?.workerLateWakeups ?? 0,
             auMaxWorkerWakeLatenessNanoseconds: auMetrics?.maxWorkerWakeLatenessNanoseconds ?? 0,
             auSchedulingStatus: auMetrics?.schedulingStatus,
+            auWorkgroupStatus: auMetrics?.workgroupStatus,
+            auWorkgroupIntervalFailures: auMetrics?.workgroupIntervalFailures ?? 0,
+            auStages: stageTimings, auStarvation: starvation,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
             effectsProcessingEnabled: auMetrics?.effectsProcessingEnabled ?? false,
-            exclusiveAccessMask: ABEngineExclusiveAccessMask(context),
+            exclusiveAccessMask: exclusiveMask,
             recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds,
             deliveryWarningReason: recentGlitches.reason)
         updated(snapshot)
