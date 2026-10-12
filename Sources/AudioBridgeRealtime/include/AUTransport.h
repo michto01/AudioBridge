@@ -13,7 +13,7 @@ typedef struct {
     uint32_t inputFrames, outputFrames, pendingFrames;
     uint64_t heartbeat, processedFrames;
     int32_t fault;
-    bool ready, stopped, bypassed;
+    bool ready, stopped, bypassed, effectsProcessingEnabled;
     float latencySeconds;
     uint32_t inFlightFrames;
     uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
@@ -30,6 +30,8 @@ void ABAUTransportReady(ABAUTransport *transport, float latency);
 void ABAUTransportSetLatency(ABAUTransport *transport, float latency);
 void ABAUTransportSetBypass(ABAUTransport *transport, bool bypass);
 bool ABAUTransportBypassed(const ABAUTransport *transport);
+void ABAUTransportSetEffectsProcessingEnabled(ABAUTransport *transport, bool enabled);
+bool ABAUTransportEffectsProcessingEnabled(const ABAUTransport *transport);
 void ABAUTransportFault(ABAUTransport *transport, int32_t fault);
 void ABAUTransportHeartbeat(ABAUTransport *transport);
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *transport);

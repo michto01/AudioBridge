@@ -6,15 +6,18 @@ struct AUEffectsView: View {
     var body: some View {
         InfoGroupBox("Audio Unit effects", message: effectsHelp) {
             VStack(alignment: .leading, spacing: 8) {
+                Toggle("Enable effect processing", isOn: Binding(
+                    get: { model.effectsProcessingEnabled }, set: { model.setEffectsProcessingEnabled($0) }
+                )).disabled(model.routingTransitioning)
                 HStack {
                     Menu("Add effect…") {
                         ForEach(model.auCatalog) { listing in Button(listing.name) { model.addAU(listing) } }
                     }.disabled(!model.canEditAU || model.auChain.effects.count >= 8 || model.auCatalog.isEmpty)
-                    Button(model.chainBypassed ? "Enable chain" : "Bypass chain") { model.setChainBypassed(!model.chainBypassed) }
-                        .disabled(model.routingTransitioning)
+                    Button(model.chainBypassed ? "Remove bypass" : "Bypass chain") { model.setChainBypassed(!model.chainBypassed) }
+                        .disabled(model.routingTransitioning || !model.effectsProcessingEnabled)
                     Button("Rescan") { model.refreshAudioUnits() }.disabled(model.auCatalogLoading)
                     Spacer()
-                    Text(model.chainBypassed ? "Chain bypassed" : "\(model.auChain.active.count) enabled").font(.caption).foregroundStyle(.secondary)
+                    Text(!model.effectsProcessingEnabled ? "Processing off · dry" : (model.chainBypassed ? "Chain bypassed" : "\(model.auChain.active.count) enabled")).font(.caption).foregroundStyle(.secondary)
                 }
                 if model.auCatalogLoading {
                     HStack {
@@ -52,6 +55,6 @@ struct AUEffectsView: View {
     }
     private var effectsHelp: String {
         let catalog = model.auCatalogScannedAt.map { "Cached catalog: \(model.auCatalog.count) effects, scanned \($0.formatted(date: .abbreviated, time: .shortened))." } ?? "The catalog has not been scanned yet."
-        return "Physical input mix → input trim → effects in listed order → drift → output gain → physical outputs. Add installed stereo Audio Units, reorder them, or open Edit to adjust their parameters.\n\nBypass outputs dry audio while effects remain processing and editable. Live inserts switch at a processing boundary; audible transitions are possible. A live editor controls the rendering instance; close it to save its settings. Stopped editors save settings for the next Start.\n\n" + catalog + " Rescan after installing or removing effects. Detailed processing counters and latency reports are in Diagnostics."
+        return "Physical input mix → input trim → effects in listed order → drift → output gain → physical outputs. Add installed stereo Audio Units, reorder them, or open Edit to adjust their parameters.\n\nTurning Enable effect processing off skips plugin render calls and forwards dry audio. Effects stay loaded and editable; plugin signal meters and DSP state stop advancing. The helper queues and scheduling remain active. The switch is saved and applies at the next processing block; audio already queued can finish first, and audible transitions or retained plugin tails are possible on re-enable. Off does not unload plugins or skip startup loading/validation.\n\nBypass outputs dry audio while effects remain processing, retaining live signal feedback in editors. The bypass preference is preserved while processing is off. Live inserts switch at a processing boundary; audible transitions are possible. A live editor controls the rendering instance; close it to save its settings. Stopped editors save settings for the next Start.\n\n" + catalog + " Rescan after installing or removing effects. Detailed processing counters and latency reports are in Diagnostics."
     }
 }

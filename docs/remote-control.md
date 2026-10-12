@@ -12,7 +12,7 @@ Default listener: TCP port 8765. Requests use a random bearer token stored in th
 Authorization: Bearer <token>
 ```
 
-`GET /api/v1/status` returns JSON with app/version, current status, running and requested flags, selected human-readable input/output names, input/output peaks as linear amplitudes from 0 to 1+, linked gains in dB, and chain bypass state.
+`GET /api/v1/status` returns JSON with app/version, current status, running and requested flags, selected human-readable input/output names, input/output peaks as linear amplitudes from 0 to 1+, linked gains in dB, chain bypass state, and requested/observed effect processing flags (`effectsProcessingEnabled` / `effectsProcessingObserved`).
 
 `POST /api/v1/control` accepts JSON commands:
 

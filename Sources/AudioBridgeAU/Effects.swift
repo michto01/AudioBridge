@@ -93,8 +93,10 @@ public struct AUWorkerRequest: Codable, Sendable {
     public let sampleRate: Double
     public let blockFrames: UInt32
     public let bypass: Bool?
-    public init(chain: AUChain, sampleRate: Double, blockFrames: UInt32, bypass: Bool = false) {
+    public let effectsProcessingEnabled: Bool?
+    public init(chain: AUChain, sampleRate: Double, blockFrames: UInt32, bypass: Bool = false, effectsProcessingEnabled: Bool = true) {
         self.chain = chain; self.sampleRate = sampleRate; self.blockFrames = blockFrames; self.bypass = bypass
+        self.effectsProcessingEnabled = effectsProcessingEnabled
     }
 }
 public struct AULiveCommand: Codable, Sendable {

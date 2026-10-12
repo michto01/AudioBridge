@@ -71,8 +71,9 @@ struct EngineDiagnosticsView: View {
             InfoGroupBox("Audio Unit processing", message: "Declared plugin signal latency and measured processing wall time describe different things. Wall time includes scheduling and preemption, so it is not added to the signal-delay estimate. Over-budget blocks and late wakeups are performance clues; correlate them with delivery-loss counters and listening. The helper renders fixed blocks and polls queues; plugin work and scheduling both use its time allowance. With 32-frame blocks at 48 kHz, one block is only 0.67 ms. Whole-chain bypass still renders plugins for editor feedback. For comparison, reset counters and remove effects. The current implementation keeps the helper even with an empty chain, so a clean empty-chain run points to plugin render work or the host overhead introduced by those units, rather than proving the helper is faultless.") {
                 VStack(spacing: 8) {
                     ReadoutRow("Processing path", metrics.auBlockBudgetNanoseconds > 0 ? "AU helper" : "Direct bridge")
+                    ReadoutRow("Effect DSP", metrics.effectsProcessingEnabled ? (metrics.chainBypassed ? "Rendering · dry bypass" : "Enabled") : "Off · dry forwarding")
                     ReadoutRow("Processed frames", "\(counters.value(\.auProcessedFrames).formatted())")
-                    ReadoutRow("Declared plugin latency", "\(number(Double(metrics.auLatencySeconds) * 1000)) ms")
+                    ReadoutRow("Effect latency applied", "\(number(Double(metrics.auLatencySeconds) * 1000)) ms")
                     ReadoutRow("Block size", "\(metrics.auBlockFrames.formatted()) frames")
                     ReadoutRow("Processing budget per block", milliseconds(metrics.auBlockBudgetNanoseconds))
                     ReadoutRow("Timed blocks", "\(counters.value(\.auRenderBlocks).formatted())")

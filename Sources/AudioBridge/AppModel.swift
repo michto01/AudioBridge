@@ -86,6 +86,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var auEditorOpen = false
     @Published private(set) var auUpdating = false
     @Published private(set) var chainBypassed = false
+    @Published private(set) var effectsProcessingEnabled = true
     private var pendingAU: AULiveCommand?
     private var editAfterUpdate: UUID?
     private var liveEditor = false
@@ -148,6 +149,7 @@ final class AppModel: ObservableObject {
             } catch { auScanError = "Cached effect list could not be read. A background scan will replace it." }
         }
         chainBypassed = preferences.bool(forKey: "AudioBridge.chainBypassed")
+        effectsProcessingEnabled = preferences.object(forKey: "AudioBridge.effectsProcessingEnabled") as? Bool ?? true
         if let saved = preferences.data(forKey: "AudioBridge.auChain") {
             do { auChain = try JSONDecoder().decode(AUChain.self, from: saved); try auChain.validate() }
             catch { self.error = "Saved AU chain could not be read: \(error.localizedDescription). Existing data retained."; canSave = false }
@@ -221,7 +223,9 @@ final class AppModel: ObservableObject {
             "inputTrimDB": inputTrim, "outputGainDB": effectiveOutputGain,
             "outputFallbackGainDB": outputGain,
             "outputLevelControl": outputDeviceVolumeWritable ? "deviceVolume" : "digitalGain",
-            "chainBypassed": chainBypassed
+            "chainBypassed": chainBypassed,
+            "effectsProcessingEnabled": effectsProcessingEnabled,
+            "effectsProcessingObserved": engineSnapshot?.effectsProcessingEnabled ?? false
         ]
     }
     private func performRemoteCommand(_ command: RemoteCommand) -> String? {
@@ -335,6 +339,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
                      inputTrim: inputTrim, outputGain: effectiveOutputGain, effects: auChain, chainBypass: chainBypassed,
+                     effectsProcessingEnabled: effectsProcessingEnabled,
                      exclusiveAccess: exclusiveAccessEnabled, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
@@ -663,6 +668,7 @@ final class AppModel: ObservableObject {
             let input = directory.appendingPathComponent("input.json"), output = directory.appendingPathComponent("saved.json")
             try JSONEncoder().encode(effect).write(to: input, options: .atomic)
             try JSONEncoder().encode(chainBypassed).write(to: directory.appendingPathComponent("bypass.json"), options: .atomic)
+            try JSONEncoder().encode(effectsProcessingEnabled).write(to: directory.appendingPathComponent("processing-enabled.json"), options: .atomic)
             let process = Process()
             process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/AudioBridgeAUWorker")
             process.arguments = ["edit", input.path, output.path]
@@ -713,6 +719,26 @@ final class AppModel: ObservableObject {
                     self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
                     self.editAfterUpdate = nil; self.error = error.localizedDescription
                     self.stopForActionRequired("Live AU change could not be applied: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    func setEffectsProcessingEnabled(_ enabled: Bool) {
+        guard canSave, !routingTransitioning else { return }
+        effectsProcessingEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "AudioBridge.effectsProcessingEnabled")
+        if let directory = auEditorDirectory {
+            do { try JSONEncoder().encode(enabled).write(to: directory.appendingPathComponent("processing-enabled.json"), options: .atomic) }
+            catch { self.error = "Unable to update editor processing indicator: \(error.localizedDescription)" }
+        }
+        if routingRequested {
+            let generation = routingGeneration
+            engine.auControl(effectsProcessingEnabled: enabled) { [weak self] result in
+                Task { @MainActor in
+                    guard let self, self.routingGeneration == generation, self.routingRequested else { return }
+                    if case .failure(let error) = result {
+                        self.stopForActionRequired("Effect processing switch failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -939,7 +965,9 @@ final class AppModel: ObservableObject {
             "Output device volume: \(deviceVolume)", "Device volume writable: \(outputDeviceVolumeWritable)",
             "Device volume error: \(outputDeviceVolumeError ?? "None")", "Exclusive access requested: \(exclusiveAccessEnabled)",
             "Exclusive input / output held: \((hogMask & 1) != 0) / \((hogMask & 2) != 0)"])
-        section("EFFECTS", ["Whole chain bypassed: \(chainBypassed)"] + auChain.effects.enumerated().map {
+        section("EFFECTS", ["Effect processing requested: \(effectsProcessingEnabled)",
+            "Effect processing observed: \(engineSnapshot?.effectsProcessingEnabled ?? false)",
+            "Whole chain bypassed: \(chainBypassed)"] + auChain.effects.enumerated().map {
             "\($0.offset + 1). \($0.element.name) [\($0.element.enabled ? "enabled" : "disabled")]"
         })
 
@@ -982,7 +1010,7 @@ final class AppModel: ObservableObject {
                 "Commanded correction: \(decimal(Double(s.driftPPM))) ppm", "Applied correction (last callback): \(decimal(Double(s.appliedDriftPPM))) ppm",
                 "Saturated callbacks: \(s.driftSaturatedCallbacks)", "Held callbacks: \(s.driftHeldCallbacks)", "Limited callbacks: \(s.driftLimitedCallbacks)"])
             let mean = s.auRenderBlocks > 0 ? "\(decimal(Double(s.auRenderNanoseconds) / Double(s.auRenderBlocks) / 1e6)) ms" : "Unavailable"
-            section("AU PROCESSING", ["Processed frames: \(s.auProcessedFrames)", "Declared plugin latency: \(decimal(Double(s.auLatencySeconds) * 1000)) ms",
+            section("AU PROCESSING", ["Processed frames: \(s.auProcessedFrames)", "Effect latency applied: \(decimal(Double(s.auLatencySeconds) * 1000)) ms",
                 "Block size: \(s.auBlockFrames) frames", "Timed blocks: \(s.auRenderBlocks)",
                 "Block budget: \(decimal(Double(s.auBlockBudgetNanoseconds) / 1e6)) ms",
                 "Wall time last: \(decimal(Double(s.auLastRenderNanoseconds) / 1e6)) ms", "Wall time mean: \(mean)",

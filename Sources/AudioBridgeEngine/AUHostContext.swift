@@ -15,7 +15,7 @@ final class AUHostContext {
     var processedFrames: UInt64 { transport.map { ABAUTransportSnapshot($0).processedFrames } ?? 0 }
     var metrics: ABAUTransportMetrics? { transport.map { ABAUTransportSnapshot($0) } }
 
-    init(chain: AUChain, plan: Phase2Plan, bypass: Bool = false, cancelled: () -> Bool) throws {
+    init(chain: AUChain, plan: Phase2Plan, bypass: Bool = false, effectsProcessingEnabled: Bool = true, cancelled: () -> Bool) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("AudioBridge-AU-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
@@ -25,7 +25,8 @@ final class AUHostContext {
                 throw AUError("Cannot allocate AU shared memory: \(String(cString: ABAUTransportLastError())).")
             }
             transport = mapping
-            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: plan.auBlockFrames, bypass: bypass)
+            let request = AUWorkerRequest(chain: chain, sampleRate: plan.sampleRate, blockFrames: plan.auBlockFrames,
+                bypass: bypass, effectsProcessingEnabled: effectsProcessingEnabled)
             let configuration = directory.appendingPathComponent("request.json")
             try JSONEncoder().encode(request).write(to: configuration, options: .atomic)
             process.executableURL = Self.workerURL
@@ -57,6 +58,10 @@ final class AUHostContext {
     func bypass(_ value: Bool) throws {
         guard let transport else { throw AUError("AU shared memory unavailable.") }
         ABAUTransportSetBypass(transport, value)
+    }
+    func setEffectsProcessingEnabled(_ value: Bool) throws {
+        guard let transport else { throw AUError("AU shared memory unavailable.") }
+        ABAUTransportSetEffectsProcessingEnabled(transport, value)
     }
     func closeEditor() throws {
         try Data().write(to: directory.appendingPathComponent("close-editor"), options: .atomic)

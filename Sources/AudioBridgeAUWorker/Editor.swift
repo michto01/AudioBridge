@@ -9,6 +9,7 @@ import SwiftUI
 @MainActor
 final class EditorBypassStatus: ObservableObject {
     @Published var bypassed = false
+    @Published var effectsProcessingEnabled = true
 }
 
 @MainActor
@@ -35,21 +36,28 @@ final class Editor: NSObject, NSWindowDelegate {
                 MainActor.assumeIsolated {
                     if let data = try? Data(contentsOf: input.deletingLastPathComponent().appendingPathComponent("bypass.json")),
                        let value = try? JSONDecoder().decode(Bool.self, from: data) { editor?.bypassStatus.bypassed = value }
+                    if let data = try? Data(contentsOf: input.deletingLastPathComponent().appendingPathComponent("processing-enabled.json")),
+                       let value = try? JSONDecoder().decode(Bool.self, from: data) { editor?.bypassStatus.effectsProcessingEnabled = value }
                 }
             }
         } catch { exit(2) }
     }
-    static func showLive(effect: AUEffect, wrapper: AVAudioUnit, bypassed: Bool, completion: @escaping (AUEffect?, String?) -> Void) {
+    static func showLive(effect: AUEffect, wrapper: AVAudioUnit, bypassed: Bool, effectsProcessingEnabled: Bool = true, completion: @escaping (AUEffect?, String?) -> Void) {
         NSApplication.shared.setActivationPolicy(.regular)
         let editor = Editor(effect: effect, output: URL(fileURLWithPath: "/dev/null"))
         editor.wrapper = wrapper; editor.unit = wrapper.auAudioUnit; editor.liveCompletion = completion
         editor.bypassStatus.bypassed = bypassed
+        editor.bypassStatus.effectsProcessingEnabled = effectsProcessingEnabled
         retained = editor; editor.open()
     }
     static func closeLive() { if retained?.liveCompletion != nil { retained?.save() } }
     static func setChainBypassed(_ bypassed: Bool) {
         guard let retained, retained.bypassStatus.bypassed != bypassed else { return }
         retained.bypassStatus.bypassed = bypassed
+    }
+    static func setEffectsProcessingEnabled(_ enabled: Bool) {
+        guard let retained, retained.bypassStatus.effectsProcessingEnabled != enabled else { return }
+        retained.bypassStatus.effectsProcessingEnabled = enabled
     }
     private func open() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
@@ -141,7 +149,10 @@ private struct EffectEditor: View {
                 if !live { Button("Cancel") { NSApplication.shared.terminate(nil) } }
             }
             Text(live ? "Controls affect the running effect immediately. Close saves settings." : "Changes apply on the next Start.").font(.caption).foregroundStyle(.secondary)
-            if bypassStatus.bypassed {
+            if !bypassStatus.effectsProcessingEnabled {
+                Label("Effect processing off — dry audio; plugin signal meters are paused.", systemImage: "pause.circle")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if bypassStatus.bypassed {
                 Label("Chain bypassed — you can edit settings; output uses dry audio.", systemImage: "arrow.triangle.branch")
                     .font(.caption).foregroundStyle(.orange)
             }

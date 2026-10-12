@@ -142,7 +142,7 @@ final class Renderer: @unchecked Sendable {
         guard latency.isFinite, latency < Double(Float.greatestFiniteMagnitude) else { throw AUError("Invalid chain latency.") }
         latencySeconds = Float(latency)
     }
-    func processBlock(bypass: Bool = false) -> Bool {
+    func processBlock(bypass: Bool = false, effectsProcessingEnabled: Bool = true) -> Bool {
         let count = Int(frames), bytes = UInt32(count * MemoryLayout<Float>.size)
         do {
             ABAUTransportHeartbeat(transport)
@@ -153,6 +153,12 @@ final class Renderer: @unchecked Sendable {
             let renderStart = ABAUTransportBeginBlock(transport, frames)
             defer { ABAUTransportEndBlock(transport, renderStart) }
             guard ABAUWorkerRead(transport, scratch, frames) == frames else { fail(-1); return false }
+            // Explicit DSP suspension: retain loaded units/settings for live
+            // re-enable, but never invoke their pull/render blocks while off.
+            if !effectsProcessingEnabled || stages.isEmpty {
+                guard ABAUWorkerWrite(transport, scratch, frames) == frames else { fail(-1); return false }
+                return true
+            }
             for i in 0..<count { first[i] = scratch[i * 2]; first[count + i] = scratch[i * 2 + 1] }
             var input = first, output = second
             var timestamp = AudioTimeStamp()

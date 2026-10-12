@@ -16,12 +16,12 @@ static void failure(const char *operation, int code) {
     snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
 }
 
-#define AB_SHARED_VERSION 4
+#define AB_SHARED_VERSION 5
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
 typedef struct {
     uint32_t version, capacity;
-    _Atomic bool ready, stopped, bypass;
+    _Atomic bool ready, stopped, bypass, effectsProcessingEnabled;
     _Atomic int32_t fault;
     _Atomic uint32_t latency;
     _Atomic uint64_t heartbeat, processedFrames;
@@ -35,6 +35,7 @@ struct ABAUTransport { Shared *shared; char name[32]; bool owner; mach_timebase_
 
 static bool valid_atomics(Shared *s) {
     return atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
+        && atomic_is_lock_free(&s->effectsProcessingEnabled)
         && atomic_is_lock_free(&s->latency) && atomic_is_lock_free(&s->heartbeat)
         && atomic_is_lock_free(&s->inFlightFrames) && atomic_is_lock_free(&s->renderBlocks)
         && atomic_is_lock_free(&s->renderNanoseconds) && atomic_is_lock_free(&s->lastRenderNanoseconds)
@@ -64,6 +65,7 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
         memset(s, 0, sizeof(*s)); s->version = AB_SHARED_VERSION; s->capacity = capacity;
         atomic_init(&s->ready, false); atomic_init(&s->stopped, false); atomic_init(&s->fault, 0);
         atomic_init(&s->bypass, false);
+        atomic_init(&s->effectsProcessingEnabled, true);
         atomic_init(&s->latency, 0); atomic_init(&s->heartbeat, 0); atomic_init(&s->processedFrames, 0);
         atomic_init(&s->inFlightFrames, 0); atomic_init(&s->renderBlocks, 0);
         atomic_init(&s->renderNanoseconds, 0); atomic_init(&s->lastRenderNanoseconds, 0); atomic_init(&s->maxRenderNanoseconds, 0);
@@ -93,6 +95,12 @@ bool ABAUTransportStopped(const ABAUTransport *t) { return atomic_load_explicit(
 uint64_t ABAUTransportProcessedFrames(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->processedFrames, memory_order_relaxed); }
 void ABAUTransportSetBypass(ABAUTransport *t, bool bypass) { atomic_store_explicit(&t->shared->bypass, bypass, memory_order_release); }
 bool ABAUTransportBypassed(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->bypass, memory_order_acquire); }
+void ABAUTransportSetEffectsProcessingEnabled(ABAUTransport *t, bool enabled) {
+    atomic_store_explicit(&t->shared->effectsProcessingEnabled, enabled, memory_order_release);
+}
+bool ABAUTransportEffectsProcessingEnabled(const ABAUTransport *t) {
+    return atomic_load_explicit(&t->shared->effectsProcessingEnabled, memory_order_acquire);
+}
 void ABAUTransportReady(ABAUTransport *t, float latency) {
     ABAUTransportSetLatency(t, latency);
     atomic_store_explicit(&t->shared->ready, true, memory_order_release);
@@ -158,6 +166,7 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     result.ready = atomic_load_explicit(&s->ready, memory_order_acquire);
     result.stopped = atomic_load_explicit(&s->stopped, memory_order_acquire);
     result.bypassed = atomic_load_explicit(&s->bypass, memory_order_acquire);
+    result.effectsProcessingEnabled = atomic_load_explicit(&s->effectsProcessingEnabled, memory_order_acquire);
     result.fault = atomic_load_explicit(&s->fault, memory_order_acquire);
     result.heartbeat = atomic_load_explicit(&s->heartbeat, memory_order_relaxed);
     result.processedFrames = atomic_load_explicit(&s->processedFrames, memory_order_relaxed);
@@ -173,7 +182,9 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     result.maxWorkerWakeLatenessNanoseconds = atomic_load_explicit(&s->maxWorkerWakeLatenessNanoseconds, memory_order_relaxed);
     result.inputFrames = available(&s->input, s->capacity); result.outputFrames = available(&s->output, s->capacity);
     result.pendingFrames = pending_frames(s);
-    uint32_t bits = atomic_load(&s->latency); memcpy(&result.latencySeconds, &bits, sizeof(bits)); return result;
+    uint32_t bits = atomic_load(&s->latency); memcpy(&result.latencySeconds, &bits, sizeof(bits));
+    if (!result.effectsProcessingEnabled || result.bypassed) result.latencySeconds = 0;
+    return result;
 }
 uint64_t ABAUTransportBeginBlock(ABAUTransport *t, uint32_t frames) {
     atomic_store_explicit(&t->shared->inFlightFrames, frames, memory_order_relaxed);

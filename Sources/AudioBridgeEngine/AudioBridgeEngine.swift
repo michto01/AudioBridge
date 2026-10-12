@@ -60,6 +60,7 @@ public struct EngineSnapshot: Sendable {
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
     public let chainBypassed: Bool
+    public let effectsProcessingEnabled: Bool
     public let exclusiveAccessMask: UInt32
     public let recentGlitches: Bool
     public let glitchCleanSeconds: Double
@@ -101,7 +102,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
 
     public init() {}
     public func start(selection: RouteSelection, profile: BufferProfile = .balanced,
-                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, exclusiveAccess: Bool = false,
+                      bufferFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, effectsProcessingEnabled: Bool = true, exclusiveAccess: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
@@ -130,7 +131,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 guard ABEngineConfigureDrift(created, next.sampleRate, next.input.device.bufferFrames ?? 512) else { throw AUError("Invalid drift configuration.") }
                 do {
                     guard next.prefill >= 16 else { throw AUError("Bridge startup fill must be at least 16 frames.") }
-                    auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass, cancelled: { [self] in
+                    auHost = try AUHostContext(chain: effects, plan: next, bypass: chainBypass,
+                        effectsProcessingEnabled: effectsProcessingEnabled, cancelled: { [self] in
                         self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
                     })
                     guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
@@ -229,12 +231,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             } catch { completion(.failure(error)) }
         }
     }
-    public func auControl(bypass: Bool? = nil, closeEditor: Bool = false,
+    public func auControl(bypass: Bool? = nil, effectsProcessingEnabled: Bool? = nil, closeEditor: Bool = false,
                           completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         queue.async { [self] in
             do {
                 guard let auHost else { throw AUError("AU helper unavailable.") }
                 if let bypass { try auHost.bypass(bypass) }
+                if let effectsProcessingEnabled { try auHost.setEffectsProcessingEnabled(effectsProcessingEnabled) }
                 if closeEditor { try auHost.closeEditor() }
                 completion(.success(()))
             } catch { completion(.failure(error)) }
@@ -342,6 +345,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auMaxWorkerWakeLatenessNanoseconds: auMetrics?.maxWorkerWakeLatenessNanoseconds ?? 0,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
+            effectsProcessingEnabled: auMetrics?.effectsProcessingEnabled ?? false,
             exclusiveAccessMask: ABEngineExclusiveAccessMask(context),
             recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds,
             deliveryWarningReason: recentGlitches.reason)

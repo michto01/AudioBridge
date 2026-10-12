@@ -24,7 +24,8 @@ final class RenderDriver: @unchecked Sendable {
             // Bound temporary Objective-C objects from plugin rendering on this
             // long-lived helper thread. This is outside every HAL callback.
             let succeeded = autoreleasepool {
-                renderer.processBlock(bypass: ABAUTransportBypassed(renderer.transport))
+                renderer.processBlock(bypass: ABAUTransportBypassed(renderer.transport),
+                    effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(renderer.transport))
             }
             if !succeeded { return }
         }
@@ -49,6 +50,7 @@ final class LiveHost {
     func start() {
         Self.retained = self
         driver.setBypass(request.bypass == true)
+        ABAUTransportSetEffectsProcessingEnabled(transport, request.effectsProcessingEnabled ?? true)
         ABAUTransportConfigureTiming(transport, renderer.blockBudgetNanoseconds)
         ABAUTransportReady(transport, renderer.latencySeconds)
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -70,8 +72,9 @@ final class LiveHost {
         busy = false
     }
     private func poll() {
-        renderer.refreshLatency()
+        if ABAUTransportEffectsProcessingEnabled(transport) { renderer.refreshLatency() }
         Editor.setChainBypassed(ABAUTransportBypassed(transport))
+        Editor.setEffectsProcessingEnabled(ABAUTransportEffectsProcessingEnabled(transport))
         let close = directory.appendingPathComponent("close-editor")
         if FileManager.default.fileExists(atPath: close.path) {
             try? FileManager.default.removeItem(at: close); Editor.closeLive()
@@ -92,7 +95,8 @@ final class LiveHost {
             guard let stage = renderer.stages.first(where: { $0.effect.id == id }) else {
                 reply(AULiveResponse(id: command.id, error: "Effect is not loaded in the live chain.")); return
             }
-            Editor.showLive(effect: stage.effect, wrapper: stage.wrapper, bypassed: ABAUTransportBypassed(transport)) { [weak self] effect, error in
+            Editor.showLive(effect: stage.effect, wrapper: stage.wrapper, bypassed: ABAUTransportBypassed(transport),
+                effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(transport)) { [weak self] effect, error in
                 self?.reply(AULiveResponse(id: command.id, effect: effect, error: error))
             }
             return
