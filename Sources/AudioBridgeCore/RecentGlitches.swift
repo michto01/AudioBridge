@@ -1,5 +1,5 @@
 /// Cumulative counters remain intact. Only the presentation recovers after
-/// twenty continuously healthy seconds on a monotonic clock. Queue recentering
+/// five continuously healthy seconds on a monotonic clock. Queue recentering
 /// and rebuffer bookkeeping alone are not evidence of lost frames.
 public struct DeliveryCounters: Equatable, Sendable {
     public let underruns, overruns, formatFaults, rebuffers, recentered: UInt64
@@ -11,23 +11,39 @@ public struct DeliveryCounters: Equatable, Sendable {
 }
 
 public struct RecentGlitches: Sendable {
+    public static let warningRecoverySeconds = 5.0
     private var previous = DeliveryCounters()
     private var healthySince: Double?
     private var everHealthy = false
     public private(set) var active = false
     public private(set) var cleanSeconds: Double = 0
+    public private(set) var reason: String?
     public init() {}
-    public mutating func update(now: Double, healthy: Bool, counters: DeliveryCounters) {
+    public mutating func update(now: Double, healthy: Bool, unhealthyReason: String? = nil, counters: DeliveryCounters) {
         guard now.isFinite else { return }
-        let deliveryLossChanged = counters.underruns != previous.underruns
-            || counters.overruns != previous.overruns
-            || counters.formatFaults != previous.formatFaults
-        if deliveryLossChanged {
-            active = true; healthySince = nil; cleanSeconds = 0
+        var reasons: [String] = []
+        if counters.underruns > previous.underruns {
+            reasons.append("Output underrun: \(counters.underruns - previous.underruns) frames lost")
+        }
+        if counters.overruns > previous.overruns {
+            reasons.append("Input overrun: \(counters.overruns - previous.overruns) frames dropped")
+        }
+        if counters.formatFaults > previous.formatFaults {
+            reasons.append("Audio format fault: \(counters.formatFaults - previous.formatFaults) new fault(s)")
+        }
+        if !reasons.isEmpty {
+            active = true
+            reason = reasons.joined(separator: " · ")
+            healthySince = nil
+            cleanSeconds = 0
         }
         previous = counters
         if !healthy {
-            if everHealthy { active = true }
+            if everHealthy {
+                active = true
+                if reasons.isEmpty, let unhealthyReason { reason = unhealthyReason }
+                else if reasons.isEmpty, reason == nil { reason = "Audio delivery is not yet healthy" }
+            }
             healthySince = nil; cleanSeconds = 0
             return
         }
@@ -35,6 +51,9 @@ public struct RecentGlitches: Sendable {
         if let start = healthySince { if now < start { healthySince = now } }
         else { healthySince = now }
         cleanSeconds = max(0, now - (healthySince ?? now))
-        if cleanSeconds >= 20 { active = false }
+        if cleanSeconds >= Self.warningRecoverySeconds {
+            active = false
+            reason = nil
+        }
     }
 }

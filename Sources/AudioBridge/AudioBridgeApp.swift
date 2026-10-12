@@ -173,6 +173,16 @@ private struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
+                    if let metrics = model.engineSnapshot, metrics.recentGlitches {
+                        GroupBox("Current delivery warning") {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label(metrics.deliveryWarningReason ?? "Audio delivery was interrupted", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("Clears after 5 seconds of healthy callbacks and no new lost frames · \(Int(min(5, metrics.glitchCleanSeconds)))/5 seconds clean. Cumulative loss counts remain below.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                     Text("Desired routing: \(model.recovery.desired ? "on" : "off") · resume at launch: \(model.resumeAtLaunch ? "on" : "off") · recovery attempts: \(model.recovery.attempts)")
                     if let fault = model.lastRecoveryFault { Text("Last recovery fault: \(fault)").font(.caption) }
                     DisclosureGroup("Recovery history (this session)") {

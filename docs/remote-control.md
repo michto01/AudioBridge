@@ -2,7 +2,7 @@
 
 The listeners are opt-in in Settings → Remote and use native Apple Network and Security frameworks. No external Swift package is required.
 
-HTTP and OSC each have an independent Start/Stop action and status label. Applying endpoint/security edits restarts the enabled listeners; starting or stopping one service does not stop the other.
+HTTP and OSC each have one independent on/off switch and a status label. Configuration edits save automatically; switch a service off and on to apply edits to that listener. Starting or stopping one service does not stop the other.
 
 ## HTTP API
 

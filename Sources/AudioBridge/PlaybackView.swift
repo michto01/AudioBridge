@@ -41,8 +41,8 @@ struct PlaybackView: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
-                if model.showDebugInformation, let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
-                    Text("Delivery warning clears after 20 healthy seconds · \(Int(min(20, s.glitchCleanSeconds)))/20 s. Historical counters remain in Diagnostics.")
+                if let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
+                    Text("Delivery warning: \(s.deliveryWarningReason ?? "Audio delivery was interrupted") · clears after 5 healthy seconds (\(Int(min(5, s.glitchCleanSeconds)))/5 s).")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 HStack {
@@ -114,10 +114,9 @@ private struct PlaybackEndpointCard: View {
                 GainControl(model: model, direction: direction)
                 if direction == .output {
                     OutputDeviceVolumeControl(model: model)
-                } else { Color.clear.frame(height: 32) }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 285, alignment: .topLeading)
             .padding(3)
         }
         .frame(maxWidth: .infinity)

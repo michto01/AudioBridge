@@ -891,7 +891,7 @@ final class AppModel: ObservableObject {
                 "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
         } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }
         if let s = engineSnapshot, let estimate = delayEstimate {
-            lines.append("Recent glitches: \(s.recentGlitches); continuously healthy: \(s.glitchCleanSeconds) / 20 seconds; counters remain cumulative")
+            lines.append("Recent delivery warning: \(s.recentGlitches); reason: \(s.deliveryWarningReason ?? "none"); continuously healthy: \(s.glitchCleanSeconds) / 5 seconds; counters remain cumulative")
             let bridge = estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map(String.init(describing:)) ?? "unknown"
             let hardware = estimate.subtotalMilliseconds(categories: [.deviceReported]).map(String.init(describing:)) ?? "unknown"
             lines.append("Delay bridge + callback buffers: \(bridge) ms; device-reported: \(hardware) ms")

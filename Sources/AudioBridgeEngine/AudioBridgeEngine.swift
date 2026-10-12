@@ -63,6 +63,7 @@ public struct EngineSnapshot: Sendable {
     public let exclusiveAccessMask: UInt32
     public let recentGlitches: Bool
     public let glitchCleanSeconds: Double
+    public let deliveryWarningReason: String?
 }
 
 public struct MeterLevel: Sendable {
@@ -299,8 +300,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             queueHighFrames = max(queueHighFrames ?? queued, queued)
         }
         let auResponse = auHost?.response
+        let unhealthyReason = fault.map { "Audio engine fault: \($0)" }
+            ?? (!inputActive ? "No fresh input callbacks"
+                : (!outputActive ? "No fresh output callbacks" : "Output has not rendered frames"))
         recentGlitches.update(now: ProcessInfo.processInfo.systemUptime,
             healthy: fault == nil && inputActive && outputActive && metrics.outputFrames > 0,
+            unhealthyReason: unhealthyReason,
             counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
                 formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)"; faultKind = .unsafeTeardown }
@@ -338,7 +343,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
             exclusiveAccessMask: ABEngineExclusiveAccessMask(context),
-            recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds)
+            recentGlitches: recentGlitches.active, glitchCleanSeconds: recentGlitches.cleanSeconds,
+            deliveryWarningReason: recentGlitches.reason)
         updated(snapshot)
     }
     private func stopOnQueue() -> String? {
