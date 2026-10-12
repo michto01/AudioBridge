@@ -102,6 +102,8 @@ User-authorized CPU/card follow-up: 0.5.4/build 27 places channel/rate metadata 
 
 User-authorized output-level simplification: 0.5.5/build 28 retains input trim, uses writable device volume as the primary output control, and holds digital output gain at unity in that mode. Devices without writable volume expose the saved digital gain as a fallback. See [output-level fallback results](output-level-fallback-results.md). Phase 5 operational acceptance remains pending.
 
+User-authorized diagnostic follow-up: 0.5.6/build 29 adds Reset counters as a safe observation baseline, retains engine lifetime totals and health checks, and exposes AU block processing budget and aggregated lost-frame duration. Empty chains still use the helper; removing plugins narrows the failure to plugin render work or associated hosting/scheduling overhead. See [diagnostic reset and AU investigation](diagnostic-reset-au-results.md). Phase 5 operational acceptance remains pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

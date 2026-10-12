@@ -6,7 +6,16 @@ struct LiveEngineDiagnostics: View {
     @ObservedObject var telemetry: EngineTelemetry
     var body: some View {
         if let metrics = telemetry.snapshot {
-            EngineDiagnosticsView(metrics: metrics)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(telemetry.countersResetAt.map { "Counters since \($0.formatted(date: .omitted, time: .standard))" } ?? "Counters since routing started")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset counters") { telemetry.resetCounters() }
+                    InfoButton(title: "Reset diagnostic counters", message: "Starts a new measurement window for displayed callback, frame, loss, drift-event, AU timing and full-scale sample counts. It does not restart audio, empty queues, reset drift, clear faults or hide a delivery warning. Live values stay live; maxima and observed queue range remain labeled for the entire run. Copy Status includes this measurement window and retains lifetime totals. A new routing attempt starts a new window automatically.")
+                }
+                EngineDiagnosticsView(metrics: metrics, baseline: telemetry.counterBaseline)
+            }
         }
     }
 }
@@ -14,24 +23,27 @@ struct LiveEngineDiagnostics: View {
 /// Keep values in stable rows rather than making the operator parse sentences.
 struct EngineDiagnosticsView: View {
     let metrics: EngineSnapshot
+    var baseline: EngineSnapshot? = nil
+    private var counters: DiagnosticCounterWindow { DiagnosticCounterWindow(snapshot: metrics, baseline: baseline) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            InfoGroupBox("Audio delivery", message: "Callback freshness and priming confirm local audio delivery. Lost-frame and format-fault counts remain cumulative for the run. A warning clears after five healthy seconds; queue recentering and rebuffer bookkeeping alone do not trigger it. Full-scale audio is shown separately as a signal level, not a delivery fault.") {
+            InfoGroupBox("Audio delivery", message: "Callback freshness and priming confirm local audio delivery. Counts cover the current diagnostic measurement window; engine lifetime totals remain in Copy Status. A warning clears after five healthy seconds; queue recentering and rebuffer bookkeeping alone do not trigger it. Full-scale audio is shown separately as a signal level, not a delivery fault.") {
                 VStack(spacing: 8) {
                     if metrics.recentGlitches {
                         ReadoutRow("Warning", metrics.deliveryWarningReason ?? "Delivery interrupted").foregroundStyle(.orange)
                         ReadoutRow("Recovery", "\(Int(min(5, metrics.glitchCleanSeconds))) / 5 seconds clean")
                         Divider()
                     }
-                    ReadoutRow("Input callbacks", "\(metrics.inputCallbacks.formatted()) · \(metrics.inputActive ? "fresh" : "not fresh")")
-                    ReadoutRow("Output callbacks", "\(metrics.outputCallbacks.formatted()) · \(metrics.outputActive ? "fresh" : "not fresh")")
-                    ReadoutRow("Captured frames", "\(metrics.inputFrames.formatted())")
-                    ReadoutRow("Rendered frames", "\(metrics.outputFrames.formatted())")
+                    ReadoutRow("Input callbacks", "\(counters.value(\.inputCallbacks).formatted()) · \(metrics.inputActive ? "fresh" : "not fresh")")
+                    ReadoutRow("Output callbacks", "\(counters.value(\.outputCallbacks).formatted()) · \(metrics.outputActive ? "fresh" : "not fresh")")
+                    ReadoutRow("Captured frames", "\(counters.value(\.inputFrames).formatted())")
+                    ReadoutRow("Rendered frames", "\(counters.value(\.outputFrames).formatted())")
                     Divider()
-                    ReadoutRow("Underrun frames", "\(metrics.underrunFrames.formatted())")
-                    ReadoutRow("Overrun frames", "\(metrics.overrunFrames.formatted())")
-                    ReadoutRow("Format faults", "\(metrics.formatFaults.formatted())")
+                    ReadoutRow("Underrun frames", "\(counters.value(\.underrunFrames).formatted())")
+                    ReadoutRow("Overrun frames", "\(counters.value(\.overrunFrames).formatted())")
+                    ReadoutRow("Format faults", "\(counters.value(\.formatFaults).formatted())")
+                    ReadoutRow("Lost / dropped audio · sum", "\(number(Double(counters.value(\.underrunFrames)) / metrics.sampleRate * 1000)) / \(number(Double(counters.value(\.overrunFrames)) / metrics.sampleRate * 1000)) ms")
                 }
             }
             InfoGroupBox("Queues & clocks", message: "The timestamp-derived clock difference is separate from the occupancy controller's correction command. FIFO occupancy naturally changes between callbacks. A correction value alone is not evidence of lost audio or a physical clock fault. Pending source includes accepted capture not yet consumed or discarded; individual queue snapshots are approximate.") {
@@ -43,39 +55,41 @@ struct EngineDiagnosticsView: View {
                     ReadoutRow("Pending source", "\(metrics.pendingSourceFrames.formatted()) frames")
                     ReadoutRow("Capture / processing / ready", "\(metrics.captureQueueFrames.formatted()) / \(metrics.auInFlightFrames.formatted()) / \(metrics.processedQueueFrames.formatted()) frames")
                     if let low = metrics.queueLowFrames, let high = metrics.queueHighFrames {
-                        ReadoutRow("Observed queue range", "\(low.formatted())–\(high.formatted()) frames")
+                        ReadoutRow("Observed queue range · run", "\(low.formatted())–\(high.formatted()) frames")
                     }
                     Divider()
                     ReadoutRow("Measured clock difference", metrics.clockEstimateValid ? "\(number(Double(metrics.measuredClockDifferencePPM))) ppm" : "Unavailable")
                     ReadoutRow("Correction command", "\(number(Double(metrics.driftPPM))) ppm")
                     ReadoutRow("Applied correction", "\(number(Double(metrics.appliedDriftPPM))) ppm")
-                    ReadoutRow("Saturated callbacks", "\(metrics.driftSaturatedCallbacks.formatted())")
-                    ReadoutRow("Held / limited callbacks", "\(metrics.driftHeldCallbacks.formatted()) / \(metrics.driftLimitedCallbacks.formatted())")
+                    ReadoutRow("Saturated callbacks", "\(counters.value(\.driftSaturatedCallbacks).formatted())")
+                    ReadoutRow("Held / limited callbacks", "\(counters.value(\.driftHeldCallbacks).formatted()) / \(counters.value(\.driftLimitedCallbacks).formatted())")
                     ReadoutRow("Refill threshold", "\(metrics.refillThresholdFrames.formatted()) frames")
-                    ReadoutRow("Rebuffer events", "\(metrics.rebufferEvents.formatted())")
-                    ReadoutRow("Recentered frames", "\(metrics.recenterFrames.formatted())")
+                    ReadoutRow("Rebuffer events", "\(counters.value(\.rebufferEvents).formatted())")
+                    ReadoutRow("Recentered frames", "\(counters.value(\.recenterFrames).formatted())")
                 }
             }
-            InfoGroupBox("Audio Unit processing", message: "Declared plugin signal latency and measured processing wall time describe different things. Wall time includes scheduling and preemption, so it is not added to the signal-delay estimate. Over-budget blocks and late wakeups are performance clues; correlate them with delivery-loss counters and listening.") {
+            InfoGroupBox("Audio Unit processing", message: "Declared plugin signal latency and measured processing wall time describe different things. Wall time includes scheduling and preemption, so it is not added to the signal-delay estimate. Over-budget blocks and late wakeups are performance clues; correlate them with delivery-loss counters and listening. The helper renders fixed blocks and polls queues; plugin work and scheduling both use its time allowance. With 32-frame blocks at 48 kHz, one block is only 0.67 ms. Whole-chain bypass still renders plugins for editor feedback. For comparison, reset counters and remove effects. The current implementation keeps the helper even with an empty chain, so a clean empty-chain run points to plugin render work or the host overhead introduced by those units, rather than proving the helper is faultless.") {
                 VStack(spacing: 8) {
-                    ReadoutRow("Processed frames", "\(metrics.auProcessedFrames.formatted())")
+                    ReadoutRow("Processing path", metrics.auBlockBudgetNanoseconds > 0 ? "AU helper" : "Direct bridge")
+                    ReadoutRow("Processed frames", "\(counters.value(\.auProcessedFrames).formatted())")
                     ReadoutRow("Declared plugin latency", "\(number(Double(metrics.auLatencySeconds) * 1000)) ms")
                     ReadoutRow("Block size", "\(metrics.auBlockFrames.formatted()) frames")
-                    ReadoutRow("Timed blocks", "\(metrics.auRenderBlocks.formatted())")
+                    ReadoutRow("Processing budget per block", milliseconds(metrics.auBlockBudgetNanoseconds))
+                    ReadoutRow("Timed blocks", "\(counters.value(\.auRenderBlocks).formatted())")
                     ReadoutRow("Processing time · last", milliseconds(metrics.auLastRenderNanoseconds))
-                    ReadoutRow("Processing time · mean", metrics.auRenderBlocks > 0 ? "\(number(Double(metrics.auRenderNanoseconds) / Double(metrics.auRenderBlocks) / 1e6)) ms" : "Unavailable")
-                    ReadoutRow("Processing time · maximum", milliseconds(metrics.auMaxRenderNanoseconds))
-                    ReadoutRow("Over-budget blocks", "\(metrics.auRenderOverBudgetBlocks.formatted())")
-                    ReadoutRow("Late worker wakeups", "\(metrics.auWorkerLateWakeups.formatted()) / \(metrics.auWorkerWaits.formatted())")
-                    ReadoutRow("Maximum wake lateness", milliseconds(metrics.auMaxWorkerWakeLatenessNanoseconds))
+                    ReadoutRow("Processing time · mean", counters.value(\.auRenderBlocks) > 0 ? "\(number(Double(counters.value(\.auRenderNanoseconds)) / Double(counters.value(\.auRenderBlocks)) / 1e6)) ms" : "Unavailable")
+                    ReadoutRow("Processing time · maximum run", milliseconds(metrics.auMaxRenderNanoseconds))
+                    ReadoutRow("Over-budget blocks", "\(counters.value(\.auRenderOverBudgetBlocks).formatted())")
+                    ReadoutRow("Late worker wakeups", "\(counters.value(\.auWorkerLateWakeups).formatted()) / \(counters.value(\.auWorkerWaits).formatted())")
+                    ReadoutRow("Maximum wake lateness · run", milliseconds(metrics.auMaxWorkerWakeLatenessNanoseconds))
                 }
             }
-            InfoGroupBox("Signal levels", message: "Full-scale sample counts are cumulative signal-level indicators. Digital attenuation cannot repair clipping that happened during capture. Stereo meter counts are shown as Mix L / Mix R; raw input and physical output counts refer to device-side samples.") {
+            InfoGroupBox("Signal levels", message: "Full-scale sample counts cover the current measurement window and indicate signal level. Digital attenuation cannot repair clipping that happened during capture. Stereo meter counts are shown as Mix L / Mix R; raw input and physical output counts refer to device-side samples.") {
                 VStack(spacing: 8) {
-                    ReadoutRow("Input full-scale samples · L / R", metrics.inputLevels.map { $0.clippedSamples.formatted() }.joined(separator: " / "))
-                    ReadoutRow("Output full-scale samples · L / R", metrics.outputLevels.map { $0.clippedSamples.formatted() }.joined(separator: " / "))
-                    ReadoutRow("Raw input full-scale samples", metrics.rawInputClips.map { $0.formatted() }.joined(separator: " / "))
-                    ReadoutRow("Physical output full-scale samples", "\(metrics.physicalOutputClips.formatted())")
+                    ReadoutRow("Input full-scale samples · L / R", counters.pairs(metrics.inputLevels.map(\.clippedSamples), baseline?.inputLevels.map(\.clippedSamples)))
+                    ReadoutRow("Output full-scale samples · L / R", counters.pairs(metrics.outputLevels.map(\.clippedSamples), baseline?.outputLevels.map(\.clippedSamples)))
+                    ReadoutRow("Raw input full-scale samples", counters.pairs(metrics.rawInputClips, baseline?.rawInputClips))
+                    ReadoutRow("Physical output full-scale samples", "\(counters.value(\.physicalOutputClips).formatted())")
                     ReadoutRow("Physical output peak", metrics.physicalOutputPeak > 0
                         ? String(format: "%.0f dB", 20 * log10(Double(metrics.physicalOutputPeak))) : "−∞ dB")
                 }

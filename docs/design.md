@@ -77,3 +77,7 @@ All controls keyboard accessible with VoiceOver labels. Preserve menu-bar status
 ### Output level control
 
 Bridge retains input trim. Its output card offers one level control: writable Core Audio device volume where available; digital stereo gain otherwise, labeled as a fallback. Digital gain is held at 0 dB when device volume is available, while the saved fallback gain is retained. Same-device capability refresh preserves the active mode until readback completes; Start waits for pending capability checks. Software output meters are upstream of device volume. The menu keeps device volume only; fallback gain is configured in Bridge. Remote output-gain commands are rejected when device volume is available or its check is pending; status exposes applied and saved fallback gain separately.
+
+### Diagnostic measurement window
+
+Reset counters in Diagnostics zeros displayed cumulative delivery, callback, frame, drift-event, AU timing and clipping counts by taking a snapshot baseline. Engine counters, callback timestamps, queues, drift and health checks stay intact. Interval processing mean is derived from interval render nanoseconds and block count. Current queue/rate/latency/clock/last-block values stay live; lifetime maxima and queue range are labeled for the run. Copy Status includes the reset timestamp and interval counts alongside lifetime totals. New routing attempts clear the baseline.

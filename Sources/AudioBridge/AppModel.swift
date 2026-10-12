@@ -11,7 +11,19 @@ import Darwin
 /// Frequent meter/counter updates do not invalidate every settings tab.
 @MainActor
 final class EngineTelemetry: ObservableObject {
-    @Published var snapshot: EngineSnapshot?
+    @Published var snapshot: EngineSnapshot? {
+        didSet {
+            if snapshot == nil { counterBaseline = nil; countersResetAt = nil }
+        }
+    }
+    @Published private(set) var counterBaseline: EngineSnapshot?
+    @Published private(set) var countersResetAt: Date?
+
+    func resetCounters() {
+        guard let snapshot else { return }
+        counterBaseline = snapshot
+        countersResetAt = Date()
+    }
 }
 
 @MainActor
@@ -932,6 +944,27 @@ final class AppModel: ObservableObject {
         })
 
         if let s = engineSnapshot {
+            if let resetAt = telemetry.countersResetAt {
+                let window = DiagnosticCounterWindow(snapshot: s, baseline: telemetry.counterBaseline)
+                let fields: [(String, KeyPath<EngineSnapshot, UInt64>)] = [
+                    ("Input callbacks", \.inputCallbacks), ("Output callbacks", \.outputCallbacks),
+                    ("Captured frames", \.inputFrames), ("Rendered frames", \.outputFrames),
+                    ("Underrun frames", \.underrunFrames), ("Overrun frames", \.overrunFrames),
+                    ("Format faults", \.formatFaults), ("Rebuffer events", \.rebufferEvents),
+                    ("Recentered frames", \.recenterFrames), ("Saturated callbacks", \.driftSaturatedCallbacks),
+                    ("Held callbacks", \.driftHeldCallbacks), ("Limited callbacks", \.driftLimitedCallbacks),
+                    ("AU processed frames", \.auProcessedFrames), ("AU timed blocks", \.auRenderBlocks),
+                    ("AU processing nanoseconds", \.auRenderNanoseconds), ("AU over-budget blocks", \.auRenderOverBudgetBlocks),
+                    ("Worker waits", \.auWorkerWaits), ("Late worker wakeups", \.auWorkerLateWakeups),
+                    ("Physical output full-scale samples", \.physicalOutputClips)
+                ]
+                section("MEASUREMENT WINDOW", ["Counters reset at: \(ISO8601DateFormatter().string(from: resetAt))"]
+                    + fields.map { "\($0.0): \(window.value($0.1))" }
+                    + ["Input full-scale samples L / R: \(window.pairs(s.inputLevels.map(\.clippedSamples), telemetry.counterBaseline?.inputLevels.map(\.clippedSamples)))",
+                       "Output full-scale samples L / R: \(window.pairs(s.outputLevels.map(\.clippedSamples), telemetry.counterBaseline?.outputLevels.map(\.clippedSamples)))",
+                       "Raw input full-scale samples: \(window.pairs(s.rawInputClips, telemetry.counterBaseline?.rawInputClips))",
+                       "Following delivery/AU/signal sections retain lifetime run totals; live state and warnings are unchanged."])
+            }
             section("DELIVERY", ["Recent warning: \(s.recentGlitches)", "Warning reason: \(s.deliveryWarningReason ?? "None")",
                 "Continuously healthy: \(decimal(s.glitchCleanSeconds)) seconds (warning clears at 5 seconds)",
                 "Input callbacks: \(s.inputCallbacks)", "Output callbacks: \(s.outputCallbacks)",
