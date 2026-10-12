@@ -118,6 +118,8 @@ CPU comparisons and Phase 5 operational acceptance remain pending.
 
 ## 0.6 — Audio reliability revision (current review gate)
 
+Operator-language and permissions follow-up: 0.6.3/build 36 reviews Czech audio terminology against Audacity, distinguishes notification preference from actual macOS authorization, groups permissions in General and avoids redundant meter geometry updates during scrolling. No system-audio capture or DSP retuning is added. See [source findings and pending acceptance](translation-permissions-scroll-results.md). Scrolling-related noise, permission shortcuts and audio/soak acceptance remain unverified.
+
 Continuous DSP/startup follow-up: 0.6.2/build 35 keeps transport active for DSP switching, lazily prepares saved effects after a dry start, applies a 20 ms dry/wet fade, tries half-device AU blocks in Automatic, starts output before capture, uses monotonic callback supervision and reports actual recenter discards as recent loss. Czech buffer units now use vzorky. See [whole-pipeline audit and deferred acceptance](continuous-dsp-pipeline-results.md). Live switching, CPU and long-run acceptance remain pending.
 
 Audio-first follow-up: 0.6.1/build 34 corrects the full-block-only AU input pull callback to support timestamp-addressed portions of a prepared block with bounded validation. See [source finding and deferred acceptance](au-input-pull-results.md). This is not a confirmed fix for the operator's periodic underruns; current runtime diagnostics and the 0.6 operational gate remain pending. The microphone-permission icon is deferred.

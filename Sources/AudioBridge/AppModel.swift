@@ -41,7 +41,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var simpleBufferFrames: UInt32 = 128
     @Published private(set) var customAUFrames: UInt32?
     @Published private(set) var deviceErrorNotifications = false
-    @Published private(set) var notificationStatus = "Not enabled"
+    @Published private(set) var notificationStatus = "Not checked"
     @Published var showRemoteTab = true
     @Published var showDiagnosticsTab = true
     @Published private(set) var routingStartedAt: Date?
@@ -1016,6 +1016,11 @@ final class AppModel: ObservableObject {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else { return }
         NSWorkspace.shared.open(url)
     }
+    func openNotificationSettings() {
+        settingsRestorePending = true
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
     func consumeSettingsRestoreRequest() -> Bool {
         let pending = settingsRestorePending
         settingsRestorePending = false
@@ -1176,19 +1181,27 @@ final class AppModel: ObservableObject {
         deviceErrorNotifications = enabled
         UserDefaults.standard.set(enabled, forKey: "AudioBridge.deviceErrorNotifications")
         if enabled {
+            settingsRestorePending = true
             Task { @MainActor in
                 do {
-                    let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-                    notificationStatus = allowed ? "Allowed" : "Denied in System Settings"
+                    _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+                    refreshNotificationStatus()
                 } catch { notificationStatus = error.localizedDescription }
             }
-        } else { notificationStatus = "Not enabled" }
+        } else { refreshNotificationStatus() }
     }
     func refreshNotificationStatus() {
         Task { @MainActor in
             let settings = await UNUserNotificationCenter.current().notificationSettings()
-            notificationStatus = settings.authorizationStatus == .authorized ? "Allowed"
-                : (settings.authorizationStatus == .denied ? "Denied in System Settings" : "Not requested")
+            // App preference and OS authorization are independent. Switching
+            // our notifications off does not revoke macOS authorization.
+            switch settings.authorizationStatus {
+            case .authorized: notificationStatus = "Allowed"
+            case .provisional: notificationStatus = "Allowed quietly"
+            case .denied: notificationStatus = "Denied in System Settings"
+            case .notDetermined: notificationStatus = "Not requested"
+            @unknown default: notificationStatus = "Unknown — check System Settings"
+            }
         }
     }
     private func notifyDeviceLoss(_ message: String) {

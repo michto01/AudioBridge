@@ -52,9 +52,19 @@ struct GeneralSettingsView: View {
                         Text(L("Čeština")).tag("cs")
                     }
                 }
-                InfoGroupBox(L("Device error notifications"), message: L("A lost or changed device stops routing and latches a re-arm requirement. Reconnect does not restart audio. Enable macOS notifications here; the Bridge error remains visible even if notification permission is denied. Remote Start cannot clear this safety latch.")) {
-                    Toggle(L("Notify when a device stops the bridge"), isOn: Binding(get: { model.deviceErrorNotifications }, set: { model.setDeviceErrorNotifications($0) }))
-                    ReadoutRow(L("Notification permission"), model.notificationStatus)
+                InfoGroupBox(L("Permissions"), message: L("Microphone authorization covers capture from the selected audio input, including external audio interfaces. Audio Bridge does not create a system-audio tap or capture other apps or the screen, so it does not request system-audio recording permission. No authorization is inferred for features the app does not use.\n\nUse Request for the first microphone prompt; use Privacy Settings after a denial. Capture begins only when you start the configured bridge. After rebuilding an ad-hoc signed app, macOS may retain a stale entry; quit it, toggle its Microphone entry and reopen the same bundle.\n\nThe notification switch controls device-error alerts inside Audio Bridge. macOS permission is shown separately and is not revoked by turning that switch off. A device failure still stops routing and remains visible in Bridge even when notifications are denied. macOS Focus and notification presentation settings can suppress alerts despite authorization.")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ReadoutRow(L("Microphone permission"), model.permission)
+                        HStack {
+                            Button(L("Request permission")) { model.requestPermission() }.disabled(!model.permissionCanBeRequested)
+                            Button(L("Open Privacy Settings")) { model.openPrivacySettings() }
+                        }
+                        ReadoutRow(L("System audio capture"), L("Not used by this bridge"))
+                        Divider()
+                        Toggle(L("Notify when a device stops the bridge"), isOn: Binding(get: { model.deviceErrorNotifications }, set: { model.setDeviceErrorNotifications($0) }))
+                        ReadoutRow(L("Notification permission"), model.notificationStatus)
+                        Button(L("Open Notification Settings")) { model.openNotificationSettings() }
+                    }
                 }
                 InfoGroupBox(L("Launch & recovery"), message: launchHelp) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -69,15 +79,6 @@ struct GeneralSettingsView: View {
                         Toggle(L("Resume routing when the app launches"), isOn: Binding(get: { model.resumeAtLaunch }, set: { model.setResumeAtLaunch($0) }))
                     }
                 }
-                InfoGroupBox(L("Microphone permission"), message: L("Permission is requested only when you press Request. Capture begins when the configured bridge starts. If macOS retains a stale permission after rebuilding this ad-hoc signed app, quit it, toggle its entry in Privacy Settings and reopen the same bundle.")) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ReadoutRow(L("Permission"), model.permission)
-                        HStack {
-                            Button(L("Request permission")) { model.requestPermission() }.disabled(!model.permissionCanBeRequested)
-                            Button(L("Open Privacy Settings")) { model.openPrivacySettings() }
-                        }
-                    }
-                }
                 InfoGroupBox(L("Settings tabs"), message: L("Show the Remote tab to configure HTTP and OSC. Hiding it does not stop enabled listeners. Show Diagnostics for device identities, delivery counts, Copy Status and the interface debug toggle.")) {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle(L("Show Remote tab"), isOn: Binding(get: { model.showRemoteTab }, set: { model.setVisibleTab("Remote", visible: $0) }))
@@ -87,7 +88,9 @@ struct GeneralSettingsView: View {
             }.padding().onAppear { model.checkPermission(); model.refreshNotificationStatus() }
         }
         .onAppear { login.refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            login.refresh(); model.checkPermission(); model.refreshNotificationStatus()
+        }
     }
     private var launchHelp: String {
         let installation = login.available ? L("This bundle is eligible for login registration.") : L("Install AudioBridge.app in Applications before enabling login launch. Temporary build locations are not stable login targets.")

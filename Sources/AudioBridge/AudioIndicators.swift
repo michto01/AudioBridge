@@ -95,6 +95,8 @@ private final class NativeMeterBar: NSView {
     private let gradient = CAGradientLayer()
     private let fillMask = CALayer()
     private var fraction: CGFloat = 0
+    private var laidOutBounds: NSRect?
+    private var appearanceDirty = true
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -111,6 +113,11 @@ private final class NativeMeterBar: NSView {
     convenience init() { self.init(frame: .zero) }
     override func layout() {
         super.layout()
+        // Scrolling can request layout without resizing a meter. Do not
+        // rebuild its layer geometry or interrupt its ongoing animation.
+        guard laidOutBounds != bounds || appearanceDirty else { return }
+        laidOutBounds = bounds
+        appearanceDirty = false
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
         layer?.cornerRadius = bounds.height / 2
@@ -121,7 +128,7 @@ private final class NativeMeterBar: NSView {
         CATransaction.commit()
     }
     override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance(); needsLayout = true
+        super.viewDidChangeEffectiveAppearance(); appearanceDirty = true; needsLayout = true
     }
     func setFraction(_ value: Double) {
         let next = CGFloat(min(1, max(0, value)))

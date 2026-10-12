@@ -67,6 +67,8 @@ Settings tabs: **Bridge** holds the two-state Start/Stop control, runtime, stere
 
 Do not conflate silence with device failure. No silence notifications. Technical failure notifications should be rate-limited and optionally disabled.
 
+General groups microphone and notification permissions, their System Settings shortcuts and the device-error notification preference behind one explanatory info popover. Notification authorization is independent of the app preference and refreshes on return to the app. System-audio capture is explicitly marked unused: this device bridge creates no process tap or screen capture session and must not imply an authorization status for either. See [translation and permission follow-up](translation-permissions-scroll-results.md).
+
 ## Persistence / first launch
 
 On first launch, ask user to choose input and output; do not auto-select a potentially dangerous default output. After successful setup, enable `desiredRouting=true` by explicit confirmation; login launches and resumes if enabled. Manual Stop persists `desiredRouting=false` until Start. Store settings with a schema version and migrate safely. Reconfiguration failures should retain last known good configuration.
