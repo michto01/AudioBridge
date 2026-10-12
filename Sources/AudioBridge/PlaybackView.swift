@@ -114,7 +114,7 @@ private struct PlaybackEndpointCard: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain).contentShape(Rectangle())
                 SignalMeters(model: model, direction: direction)
-                GainControl(model: model, direction: direction)
+                if direction == .input { GainControl(model: model, direction: .input) }
                 if direction == .output {
                     OutputDeviceVolumeControl(model: model)
                 }
@@ -126,7 +126,7 @@ private struct PlaybackEndpointCard: View {
     }
     private var endpointHelp: String {
         let shared = "Click the device name or icon to open Audio configuration. Meters show measured stereo Mix L/R peaks; CLIP is a signal-level indication and holds briefly. Inactive means routing is stopped or callbacks are not fresh. Digital trim changes both channels smoothly and cannot undo clipping already present at capture."
-        return direction == .input ? shared : shared + "\n\nDevice volume controls the selected device's master volume separately from digital output gain. It remains usable during exclusive access when the driver supports it. " + (model.outputDeviceVolumeError ?? "")
+        return direction == .input ? shared : shared + "\n\nDevice volume controls the selected device's master volume and remains usable during exclusive access when the driver supports it. Digital output gain stays at 0 dB when device volume is writable. Otherwise the card offers digital gain as a fallback. Device volume is downstream of the software output meters. " + (model.outputDeviceVolumeError ?? "")
     }
     private func rate(_ value: Double?) -> String {
         guard let value else { return "Unknown rate" }

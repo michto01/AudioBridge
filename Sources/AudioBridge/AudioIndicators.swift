@@ -191,27 +191,35 @@ struct GainControl: View {
 
 struct OutputDeviceVolumeControl: View {
     @ObservedObject var model: AppModel
+    var allowsDigitalFallback = true
     private var volume: Binding<Double> {
         Binding(get: { model.outputDeviceVolume ?? 1 }, set: { model.setOutputDeviceVolume($0) })
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Device volume").font(.caption).frame(width: 80, alignment: .leading)
-                Slider(value: volume, in: 0...1)
-                    .disabled(!model.outputDeviceVolumeWritable)
-                    .accessibilityLabel("Selected output device volume")
-                Text(model.outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
-                    .font(.caption.monospacedDigit()).frame(width: 42, alignment: .trailing)
-            }
-            if !model.outputDeviceVolumeWritable {
+            if model.outputDeviceVolumeLoading {
                 HStack {
-                    Text("Unavailable").font(.caption).foregroundStyle(.secondary)
-                    InfoButton(title: "Device volume", message: model.outputDeviceVolumeError ?? "This output does not expose a writable master volume control. Digital output gain remains separate.")
+                    Text("Output level").font(.caption).frame(width: 80, alignment: .leading)
+                    ProgressView().controlSize(.small)
+                    Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if model.outputDeviceVolumeWritable {
+                HStack(spacing: 8) {
+                    Text("Device volume").font(.caption).frame(width: 80, alignment: .leading)
+                    Slider(value: volume, in: 0...1)
+                        .accessibilityLabel("Selected output device volume")
+                    Text(model.outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
+                        .font(.caption.monospacedDigit()).frame(width: 42, alignment: .trailing)
+                }
+            } else {
+                if allowsDigitalFallback { GainControl(model: model, direction: .output) }
+                HStack {
+                    Text(allowsDigitalFallback ? "Digital fallback" : "Device volume unavailable").font(.caption).foregroundStyle(.secondary)
+                    InfoButton(title: "Output level", message: (model.outputDeviceVolumeError ?? "This output does not expose a writable master volume control.") + "\n\nDigital output gain is the fallback in the Bridge tab. It changes the stereo signal smoothly before physical output mapping. When writable device volume is available, digital gain is fixed at 0 dB; the saved fallback setting is retained for devices without volume control.")
                 }
             }
         }
-        .help("Controls the selected device's Core Audio master output volume. This is separate from Audio Bridge digital output gain and may also affect other system audio clients. The device may round the requested value to its supported steps.")
+        .help("Uses selected-device volume when writable, otherwise digital gain in Bridge. Device volume may affect other audio clients and may be rounded by the driver.")
     }
 }
 

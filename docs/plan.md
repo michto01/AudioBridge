@@ -100,6 +100,8 @@ User-authorized visual correction: 0.5.3/build 26 gives Bridge icons an explicit
 
 User-authorized CPU/card follow-up: 0.5.4/build 27 places channel/rate metadata beneath each device name, separates 20 Hz engine telemetry from configuration observation, and avoids no-op recovery publications. Read-only profiling of build 26 found high main-app CPU and substantial SwiftUI layout activity. An optimized release bundle is provided for comparison. See [CPU and device-card follow-up](cpu-device-card-results.md). CPU improvement and Phase 5 operational acceptance remain unverified.
 
+User-authorized output-level simplification: 0.5.5/build 28 retains input trim, uses writable device volume as the primary output control, and holds digital output gain at unity in that mode. Devices without writable volume expose the saved digital gain as a fallback. See [output-level fallback results](output-level-fallback-results.md). Phase 5 operational acceptance remains pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

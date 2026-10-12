@@ -6,7 +6,7 @@ Native macOS controls, compact spacing, restrained status colors, no dashboard c
 
 Group titles use a larger bold heading above the controls. Each settings group has an `(i)` button for explanations, limitations and detailed state; long notes do not occupy the main control surface. Keep the single Bridge status badge and one listener status per Remote group visible. Current delivery-warning causes remain directly readable in Diagnostics. Info popovers allow text selection and scroll within a bounded height.
 
-Bridge device icons explicitly fit a 42-point square; device pickers retain compact icons. The endpoint layout measures both cards at the same column width, uses the larger intrinsic height for both and aligns their tops and bottoms. Extra output-device volume controls determine the necessary height rather than a fixed empty-space allowance. Headers, meters and trim rows align between the cards.
+Bridge device icons explicitly fit a 42-point square; device pickers retain compact icons. The endpoint layout measures both cards at the same column width, uses the larger intrinsic height for both and aligns their tops and bottoms. Device-volume or fallback-gain controls contribute to the measured height rather than a fixed empty-space allowance. Headers, meters and trim rows align between the cards.
 
 Diagnostics groups delivery, queues/clocks, Audio Unit timing, signal levels and recovery into labeled value rows. Copy Status has the same distinct report sections. Keep device catalog and session history expandable instead of interleaving technical paragraphs with controls.
 
@@ -48,7 +48,7 @@ Menu-bar waveform status: grey idle/unconfigured; green fresh healthy local call
 
 ### Gain
 
-Digital output gain: provisional -60 to +12 dB; 0 dB default; smooth changes. Display whether output device has an independent system/hardware volume setting, and do not silently change it. External analog destinations must be calibrated separately.
+Digital output gain is a fallback for devices without writable volume: -60 to +12 dB; 0 dB default; smooth changes. Writable device volume is the primary output level control, and digital gain stays at 0 dB in that mode. Device volume is changed only through explicit user control. External analog destinations must be calibrated separately.
 
 ## Status vocabulary
 
@@ -73,3 +73,7 @@ On first launch, ask user to choose input and output; do not auto-select a poten
 Diagnostics contains a “Show debug information in the interface” toggle, disabled at each launch. Bridge and Audio hide technical runtime counters, queue/timing detail and detailed delay accounting until enabled. Normal meters, status, actionable faults, buffer configuration and a compact delay estimate stay available. Diagnostics, Copy status and export retain full information independently of this display choice.
 
 All controls keyboard accessible with VoiceOver labels. Preserve menu-bar status while settings window closes. Provide a status text alternative to icon color. Show reconnect progress without blocking the UI. Do not provide a fake green success status before audio callbacks have started and health is confirmed.
+
+### Output level control
+
+Bridge retains input trim. Its output card offers one level control: writable Core Audio device volume where available; digital stereo gain otherwise, labeled as a fallback. Digital gain is held at 0 dB when device volume is available, while the saved fallback gain is retained. Same-device capability refresh preserves the active mode until readback completes; Start waits for pending capability checks. Software output meters are upstream of device volume. The menu keeps device volume only; fallback gain is configured in Bridge. Remote output-gain commands are rejected when device volume is available or its check is pending; status exposes applied and saved fallback gain separately.

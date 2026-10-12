@@ -60,6 +60,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var outputDeviceVolume: Double?
     @Published private(set) var outputDeviceVolumeWritable = false
     @Published private(set) var outputDeviceVolumeError: String?
+    @Published private(set) var outputDeviceVolumeLoading = false
+    private var outputVolumeResolvedUID: String?
+    var effectiveOutputGain: Double { outputDeviceVolumeWritable ? 0 : outputGain }
     @Published private(set) var auChain = AUChain()
     @Published private(set) var auCatalog: [AUListing] = []
     @Published private(set) var auCatalogLoading = false
@@ -98,6 +101,7 @@ final class AppModel: ObservableObject {
         startUnavailableReason == nil
     }
     var startUnavailableReason: String? {
+        if outputDeviceVolumeLoading { return "Checking selected output volume control…" }
         if restartRequired { return "Callback teardown was not confirmed. Restart the app before starting again." }
         if changingDeviceBuffer { return "Applying audio interface buffer size…" }
         if selectedBufferFrames < bufferMinimum { return "Startup fill must be at least \(bufferMinimum) frames for the current device buffers." }
@@ -202,7 +206,9 @@ final class AppModel: ObservableObject {
             "output": device(.output)?.name ?? "Unconfigured",
             "inputLeft": level(input, 0), "inputRight": level(input, 1),
             "outputLeft": level(output, 0), "outputRight": level(output, 1),
-            "inputTrimDB": inputTrim, "outputGainDB": outputGain,
+            "inputTrimDB": inputTrim, "outputGainDB": effectiveOutputGain,
+            "outputFallbackGainDB": outputGain,
+            "outputLevelControl": outputDeviceVolumeWritable ? "deviceVolume" : "digitalGain",
             "chainBypassed": chainBypassed
         ]
     }
@@ -215,7 +221,10 @@ final class AppModel: ObservableObject {
             guard canStopRouting else { return nil }
             stopRouting()
         case .inputGain(let value): setGain(value, direction: .input)
-        case .outputGain(let value): setGain(value, direction: .output)
+        case .outputGain(let value):
+            guard !outputDeviceVolumeLoading else { return "Output volume capability check is pending" }
+            guard !outputDeviceVolumeWritable else { return "Device volume is available; digital output gain is fixed at 0 dB" }
+            setGain(value, direction: .output)
         case .chainBypass(let value): setChainBypassed(value)
         }
         return nil
@@ -313,7 +322,7 @@ final class AppModel: ObservableObject {
         routingRequested = true; routingTransitioning = true
         UserDefaults.standard.set(true, forKey: "AudioBridge.desiredRouting")
         engine.start(selection: selection, profile: bufferProfile, bufferFrames: customBufferFrames,
-                     inputTrim: inputTrim, outputGain: outputGain, effects: auChain, chainBypass: chainBypassed,
+                     inputTrim: inputTrim, outputGain: effectiveOutputGain, effects: auChain, chainBypass: chainBypassed,
                      exclusiveAccess: exclusiveAccessEnabled, updated: { [weak self] snapshot in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
@@ -425,6 +434,10 @@ final class AppModel: ObservableObject {
     }
     private func attemptRecovery() {
         guard recovery.desired, !recovery.blocked, !routingRequested, !routingTransitioning, !quitting else { return }
+        if outputDeviceVolumeLoading {
+            recoveryMessage = "Waiting for output volume capability check"
+            return // The check completion resumes desired routing; no retry storm.
+        }
         let now = ProcessInfo.processInfo.systemUptime
         recovery.attempting(now: now)
         let missing = AudioDirection.allCases.filter { direction in
@@ -477,33 +490,48 @@ final class AppModel: ObservableObject {
     }
     func setGain(_ decibels: Double, direction: AudioDirection) {
         guard canSave, decibels.isFinite, GainSettings.range.contains(decibels) else { return }
+        if direction == .output && (outputDeviceVolumeWritable || outputDeviceVolumeLoading) { return }
         if direction == .input { inputTrim = decibels } else { outputGain = decibels }
         UserDefaults.standard.set(decibels, forKey: direction == .input ? "AudioBridge.inputTrim" : "AudioBridge.outputGain")
-        engine.setGains(inputTrim: inputTrim, outputGain: outputGain)
+        engine.setGains(inputTrim: inputTrim, outputGain: effectiveOutputGain)
     }
     func refreshOutputDeviceVolume() {
         outputVolumeGeneration &+= 1
         let generation = outputVolumeGeneration
         guard let uid = selection.output.uid else {
             outputDeviceVolume = nil; outputDeviceVolumeWritable = false; outputDeviceVolumeError = nil
+            outputVolumeResolvedUID = nil; outputDeviceVolumeLoading = false
             return
         }
-        outputDeviceVolume = nil; outputDeviceVolumeWritable = false; outputDeviceVolumeError = nil
+        // Preserve the current mode while rechecking the same endpoint. Clearing
+        // writability first would momentarily apply a saved fallback gain live.
+        if outputVolumeResolvedUID != uid {
+            outputDeviceVolume = nil; outputDeviceVolumeWritable = false
+        }
+        outputDeviceVolumeError = nil; outputDeviceVolumeLoading = true
         outputVolumeQueue.async { [weak self] in
             let result = Result { try CoreAudioCatalog.outputVolume(uid: uid) }
             DispatchQueue.main.async {
                 guard let self, self.outputVolumeGeneration == generation, self.selection.output.uid == uid else { return }
+                self.outputDeviceVolumeLoading = false; self.outputVolumeResolvedUID = uid
                 switch result {
                 case .success(let state):
                     self.outputDeviceVolume = state.map { Double($0.scalar) }
                     self.outputDeviceVolumeWritable = state?.writable == true
-                case .failure(let error): self.outputDeviceVolumeError = error.localizedDescription
+                case .failure(let error):
+                    self.outputDeviceVolume = nil; self.outputDeviceVolumeWritable = false
+                    self.outputDeviceVolumeError = error.localizedDescription
+                }
+                self.engine.setGains(inputTrim: self.inputTrim, outputGain: self.effectiveOutputGain)
+                if self.recovery.desired && !self.recovery.blocked && !self.routingRequested && !self.routingTransitioning,
+                   self.recovery.retryAt == nil || self.recovery.due(now: ProcessInfo.processInfo.systemUptime) {
+                    self.attemptRecovery()
                 }
             }
         }
     }
     func setOutputDeviceVolume(_ scalar: Double) {
-        guard let uid = selection.output.uid, outputDeviceVolumeWritable,
+        guard let uid = selection.output.uid, outputDeviceVolumeWritable, !outputDeviceVolumeLoading,
               scalar.isFinite, (0...1).contains(scalar) else { return }
         outputDeviceVolume = scalar
         outputVolumeGeneration &+= 1
@@ -895,7 +923,7 @@ final class AppModel: ObservableObject {
             + selection.outputMap.map { "Output ch\($0.channel) ← \($0.source.label)" })
         let deviceVolume = outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "Unavailable"
         let hogMask = engineSnapshot?.exclusiveAccessMask ?? 0
-        section("LEVELS & DEVICE ACCESS", ["Input trim: \(inputTrim) dB", "Output gain: \(outputGain) dB",
+        section("LEVELS & DEVICE ACCESS", ["Input trim: \(inputTrim) dB", "Output gain applied: \(effectiveOutputGain) dB", "Saved fallback gain: \(outputGain) dB",
             "Output device volume: \(deviceVolume)", "Device volume writable: \(outputDeviceVolumeWritable)",
             "Device volume error: \(outputDeviceVolumeError ?? "None")", "Exclusive access requested: \(exclusiveAccessEnabled)",
             "Exclusive input / output held: \((hogMask & 1) != 0) / \((hogMask & 2) != 0)"])

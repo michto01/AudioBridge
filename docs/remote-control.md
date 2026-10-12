@@ -30,7 +30,7 @@ Example read:
 curl -H 'Authorization: Bearer YOUR_TOKEN' http://AUDIOBRIDGE-MAC:8765/api/v1/status
 ```
 
-The API returns a conflict with a message when Start is unavailable. Control is limited to existing in-app Start/Stop, gain and whole-chain bypass behavior. It cannot choose devices or alter physical routing patches.
+The API returns a conflict with a message when Start is unavailable. `outputGain` is digital fallback only: it is rejected while device volume is writable or its capability check is pending. Status reports the applied `outputGainDB`, saved `outputFallbackGainDB`, and `outputLevelControl` (`deviceVolume` or `digitalGain`). Control is limited to existing in-app Start/Stop, gain and whole-chain bypass behavior. It cannot choose devices or alter physical routing patches.
 
 ## OSC/UDP
 
@@ -41,7 +41,7 @@ Default input port: UDP 9000. Commands are standard OSC messages:
 | `/audiobridge/start` | no arguments | Start selected route |
 | `/audiobridge/stop` | no arguments | Stop and suppress recovery |
 | `/audiobridge/input/gain` | `,f` | Input trim in dB |
-| `/audiobridge/output/gain` | `,f` | Output gain in dB |
+| `/audiobridge/output/gain` | `,f` | Digital fallback gain in dB; unavailable when device volume is writable or checking |
 | `/audiobridge/effects/bypass` | `,i` (0 or 1) | Set whole-chain bypass |
 
 Incoming OSC commands are dropped unless the exact source IP is in the comma separated allowlist. To send status into Companion's OSC listener, configure its Mac address and receive port in Audio Bridge. It sends these messages every second:

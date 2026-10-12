@@ -29,7 +29,7 @@ struct AudioBridgeApp: App {
                 SignalMeters(model: model, direction: .input)
                 Text("Output: \(endpointName(.output))")
                 SignalMeters(model: model, direction: .output)
-                OutputDeviceVolumeControl(model: model)
+                OutputDeviceVolumeControl(model: model, allowsDigitalFallback: false)
                 HStack {
                     RoutingToggleButton(model: model)
                     FocusSettingsButton()
