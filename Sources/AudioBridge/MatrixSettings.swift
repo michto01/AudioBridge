@@ -5,7 +5,7 @@ struct MatrixSettings: View {
     @ObservedObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            GroupBox("Input mix · \(model.device(.input)?.name ?? "Choose an input device")") {
+            InfoGroupBox("Input mix · \(model.device(.input)?.name ?? "Choose an input device")", message: "Click a cell to patch that physical input into Mix L or Mix R. The slider button adjusts the source contribution independently: 1 is unity, 0 is off. Presets use the first physical channels shown. Multiple inputs sum without automatic normalization, so reduce cell gains or input trim if the mix clips. Patches and gains change live with smooth ramps; Start/Stop is in Bridge.") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Button("Mono → L + R") { model.inputPreset(mono: true) }
@@ -29,15 +29,12 @@ struct MatrixSettings: View {
                         }
                     }.frame(height: gridHeight(inputChannels.count))
                     missing(.input, channels: inputChannels)
-                    Text("Click to patch; use each cell’s slider button to reduce that source’s contribution to Mix L or Mix R. 1 = unity, 0 = off. Presets use the first physical channel(s) shown.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }.padding(4)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Label("Mix L / Mix R → input trim → AU effects → drift → output gain", systemImage: "arrow.down")
-                Text("The same Mix L / Mix R buses below, after processing. Copies go to the physical outputs you patch.")
             }.font(.caption).foregroundStyle(.secondary)
-            GroupBox("Output patch · \(model.device(.output)?.name ?? "Choose an output device")") {
+            InfoGroupBox("Output patch · \(model.device(.output)?.name ?? "Choose an output device")", message: "These are the same Mix L and Mix R buses after effects, drift compensation and output gain. Patch either bus to as many physical outputs on the selected device as needed. Each output takes one side; right-click a row for an explicit mono L+R sum or disconnect. Summing can clip. No physical output is silently selected.") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Button("Stereo") { model.outputStereoPreset() }.disabled(outputChannels.count < 2)
@@ -61,13 +58,7 @@ struct MatrixSettings: View {
                         }
                     }.frame(height: gridHeight(outputChannels.count))
                     missing(.output, channels: outputChannels)
-                    Text("Patch L or R to multiple outputs. Each output takes one side; right-click a row for an explicit mono sum.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }.padding(4)
-            }
-            if model.selection.headroomWarning {
-                Label("Summing can exceed full scale. Reduce cell gains or trim; no automatic normalization.", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
             }
         }.disabled(!model.canEditPatches)
     }

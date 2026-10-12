@@ -30,13 +30,12 @@ struct DeviceBufferControl: View {
                             }), format: .number.grouping(.never)).frame(width: 75)
                         }
                     }.disabled(!model.canEditSelections)
-                    Text("Current: \(device.bufferFrames.map(String.init) ?? "unknown") frames · requested: \(requested). Apply interface drafts below while stopped; the driver may round or reject.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    ReadoutRow("Current buffer", "\(device.bufferFrames.map(String.init) ?? "Unknown") frames")
+                        .font(.caption)
                 }
             } else {
-                Text("Interface buffer is read-only or unavailable from this driver.").font(.caption).foregroundStyle(.secondary)
+                ReadoutRow("Interface buffer", "Read-only / unavailable").font(.caption)
             }
-            if let message = model.deviceBufferMessage { Text(message).font(.caption) }
         }
         .onAppear { readCurrent() }
         .onChange(of: device.bufferFrames) { _, _ in readCurrent() }

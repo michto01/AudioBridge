@@ -367,60 +367,61 @@ struct RemoteSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                GroupBox("HTTP API") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("HTTP API", isOn: Binding(
-                            get: { remote.httpEnabled },
-                            set: { remote.setHTTPRunning($0) }
-                        ))
-                        HStack { Text("Port"); TextField("8765", value: $remote.httpPort, format: .number.grouping(.never)).frame(width: 90) }
+                InfoGroupBox("HTTP API", message: httpHelp) {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text(remote.token.isEmpty ? "Token is created when HTTP API is enabled" : remote.token)
+                            Toggle("Enable HTTP", isOn: Binding(get: { remote.httpEnabled }, set: { remote.setHTTPRunning($0) }))
+                            Spacer()
+                            Text(remote.httpStatus).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Text("Listen port")
+                            TextField("8765", value: $remote.httpPort, format: .number.grouping(.never)).frame(width: 90)
+                        }
+                        Divider()
+                        Text("Bearer token").font(.subheadline.weight(.semibold))
+                        HStack {
+                            Text(remote.token.isEmpty ? "Not generated" : remote.token)
                                 .font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(2)
+                            Spacer()
                             Button("Copy") { remote.copyToken() }.disabled(remote.token.isEmpty)
                             Button("Regenerate") { remote.regenerateToken() }
                         }
-                        Text("GET /api/v1/status · POST /api/v1/control. Requests require Authorization: Bearer <token>. HTTP is unencrypted; use only on a trusted LAN.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Label("HTTP: \(remote.httpStatus)", systemImage: remote.httpStatus == "listening" ? "checkmark.circle.fill" : "circle")
-                        Text("Switch off and on after changing the port. A regenerated bearer token takes effect immediately.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Status: GET http://<Mac-IP>:\(remote.httpPort)/api/v1/status · control: POST http://<Mac-IP>:\(remote.httpPort)/api/v1/control. Commands: start, stop, inputGain, outputGain, chainBypass.")
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text("Status returns selected endpoint names, routing state, peak levels, linked gains and chain-bypass state. POST JSON examples: {\"command\":\"start\"}, {\"command\":\"inputGain\",\"decibels\":-6}, {\"command\":\"chainBypass\",\"bypassed\":true}.")
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    }.padding(4)
+                    }
                 }
                 .onChange(of: remote.httpPort) { _, _ in remote.saveSettings() }
-                GroupBox("OSC over UDP") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("OSC listener", isOn: Binding(
-                            get: { remote.oscEnabled },
-                            set: { remote.setOSCRunning($0) }
-                        ))
-                        HStack { Text("Listen port"); TextField("9000", value: $remote.oscPort, format: .number.grouping(.never)).frame(width: 90) }
+                InfoGroupBox("OSC", message: oscHelp) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Toggle("Enable OSC", isOn: Binding(get: { remote.oscEnabled }, set: { remote.setOSCRunning($0) }))
+                            Spacer()
+                            Text(remote.oscStatus).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Text("Listen port")
+                            TextField("9000", value: $remote.oscPort, format: .number.grouping(.never)).frame(width: 90)
+                        }
                         TextField("Allowed source IPs (comma separated)", text: $remote.allowedOSCAddresses)
-                        HStack { Text("Companion IP"); TextField("192.168.1.10", text: $remote.feedbackHost) }
-                        HStack { Text("Companion feedback port"); TextField("12321", value: $remote.feedbackPort, format: .number.grouping(.never)).frame(width: 90) }
-                        Text("Incoming commands are accepted only from the listed exact source IP addresses. Status reports are sent once per second to the Companion address and port.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Commands: /audiobridge/start, /stop, /input/gain (float dB), /output/gain (float dB), /effects/bypass (int 0 or 1). Reports: /audiobridge/status (string), /running (int), /input/left, /input/right, /output/left, /output/right (float linear peak).")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Label("OSC: \(remote.oscStatus)", systemImage: remote.oscStatus == "listening" ? "checkmark.circle.fill" : "circle")
-                        Text("Switch off and on after changing the port or Companion destination. Allowlist changes take effect immediately.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("OSC commands are accepted only from exact source IPs in the allowlist. Companion status reports use the configured destination and UDP port. OSC has no cryptographic authentication.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(4)
+                        Divider()
+                        Text("Companion feedback").font(.subheadline.weight(.semibold))
+                        HStack { Text("Address"); TextField("192.168.1.10", text: $remote.feedbackHost) }
+                        HStack {
+                            Text("Port")
+                            TextField("12321", value: $remote.feedbackPort, format: .number.grouping(.never)).frame(width: 90)
+                        }
+                    }
                 }
                 .onChange(of: remote.oscPort) { _, _ in remote.saveSettings() }
                 .onChange(of: remote.feedbackHost) { _, _ in remote.saveSettings() }
                 .onChange(of: remote.feedbackPort) { _, _ in remote.saveSettings() }
                 .onChange(of: remote.allowedOSCAddresses) { _, _ in remote.saveSettings() }
-                Label(remote.status, systemImage: "network").font(.callout)
-                Text("Each service starts and stops from its own switch. The switches and configuration are saved automatically. Enabling OSC control exposes unauthenticated UDP commands to allowlisted addresses; HTTP uses a Keychain token but is not encrypted. The macOS firewall and Local Network privacy settings may affect access.")
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
+    }
+    private var httpHelp: String {
+        "The switch starts/stops only HTTP. Settings save automatically. Cycle this switch after changing its port; regenerated tokens take effect immediately.\n\nStatus: GET http://<Mac-IP>:\(remote.httpPort)/api/v1/status\nControl: POST http://<Mac-IP>:\(remote.httpPort)/api/v1/control\nHeader: Authorization: Bearer <token>\n\nStatus includes endpoint names, routing state, linear meter peaks, gains in dB and chain bypass. Control JSON: {\"command\":\"start\"}, {\"command\":\"stop\"}, {\"command\":\"inputGain\",\"decibels\":-6}, {\"command\":\"outputGain\",\"decibels\":0}, {\"command\":\"chainBypass\",\"bypassed\":true}.\n\nHTTP has no encryption. Use a trusted LAN; macOS firewall/privacy may affect reachability. Tokens are stored in Keychain. No audio is sent.\n\nService report: \(remote.status)"
+    }
+    private var oscHelp: String {
+        "The switch starts/stops only OSC. Settings save automatically. Cycle this switch after changing its port or Companion destination; allowlist edits take effect immediately. Commands are accepted only from exact allowlisted source IPs.\n\nCommands: /audiobridge/start, /audiobridge/stop (no arguments); /audiobridge/input/gain, /audiobridge/output/gain (float dB); /audiobridge/effects/bypass (integer 0 or 1).\n\nFeedback is sent every second to Companion: /audiobridge/status (string), /audiobridge/running (integer), /audiobridge/input/left, /audiobridge/input/right, /audiobridge/output/left, /audiobridge/output/right (float linear peaks).\n\nOSC has no cryptographic authentication. Use a trusted LAN. macOS firewall and Local Network privacy can affect delivery. No audio is sent.\n\nService report: \(remote.status)"
     }
 }

@@ -96,6 +96,8 @@ User-authorized UI/stability refinement: 0.5.1/build 24 keeps trim sliders in th
 
 User-authorized usability follow-up: 0.5.2/build 25 replaces duplicated Remote enable/start/stop/apply actions with one independent switch per HTTP and OSC service, adds an explicit delivery-warning reason to Diagnostics, shortens warning recovery to five healthy seconds, and removes fixed empty space from the Bridge endpoint cards. Queue occupancy passing two buffer lengths is not used as proof of recovery; actual callback health and frame-loss counters remain the signals. See [remote/warning/card follow-up](remote-warning-ui-results.md). Automated tests and live network/audio/UI acceptance remain unrun.
 
+User-authorized visual correction: 0.5.3/build 26 gives Bridge icons an explicit 42-point size, measures equal endpoint heights from the larger card, introduces bold group headings and per-group info popovers, and structures diagnostics and Copy Status into labeled sections. See [visual correction results](ui-visual-correction-results.md). This is an operator-interface follow-up; Phase 5 operational acceptance remains pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

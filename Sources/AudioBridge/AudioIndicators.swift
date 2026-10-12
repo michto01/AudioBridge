@@ -2,6 +2,7 @@ import AudioBridgeCore
 import AudioBridgeEngine
 import SwiftUI
 import Combine
+import AppKit
 
 struct InfoButton: View {
     let title: String
@@ -11,11 +12,20 @@ struct InfoButton: View {
         Button { showing.toggle() } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
             .buttonStyle(.plain).accessibilityLabel(title)
             .popover(isPresented: $showing, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title).font(.headline)
-                    Text(message).fixedSize(horizontal: false, vertical: true)
-                }.padding(14).frame(width: 320, alignment: .leading)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(title).font(.headline)
+                        Text(message).font(.body).fontWeight(.regular).fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }.frame(width: 380, height: popoverHeight)
             }
+    }
+    private var popoverHeight: CGFloat {
+        let text = NSAttributedString(string: message, attributes: [.font: NSFont.systemFont(ofSize: 13)])
+        let bounds = text.boundingRect(with: NSSize(width: 352, height: CGFloat.greatestFiniteMagnitude),
+                                      options: [.usesLineFragmentOrigin, .usesFontLeading])
+        return min(480, max(120, ceil(bounds.height) + 64))
     }
 }
 
@@ -88,7 +98,7 @@ struct BufferSettings: View {
     @State private var expert = false
     @State private var custom = false
     var body: some View {
-        GroupBox {
+        InfoGroupBox("Bridge FIFO reserve", message: "This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start.\n\nRefill waits for this reserve plus one output callback and FIR lookahead. Smaller reserves reduce queue delay but leave less time for Audio Units and scheduler delays. If delivery losses increase, stop and raise the reserve. The driver buffers remain separate. Expert presets and exact values are available below; the valid minimum follows the larger device buffer, at least 16 frames. Actual delay is shown in Bridge.") {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     let common = BufferFrameChoices.common.filter { $0 >= Int(model.bufferMinimum) && $0 <= Int(model.bufferMaximum) }
@@ -119,8 +129,6 @@ struct BufferSettings: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text("Refill waits for this reserve plus one output callback and required FIR lookahead. Actual queue delay is shown in Bridge.")
-                    .font(.caption).foregroundStyle(.secondary)
                 }
                 DisclosureGroup("Expert", isExpanded: $expert) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -134,26 +142,15 @@ struct BufferSettings: View {
                             }
                             Button("Apply preset") { model.setBufferProfile(model.bufferProfile) }
                         }.disabled(!model.canEditSelections)
-                        Text("Minimum follows the larger device buffer, at least 16 frames. FIR conversion adds 17 frames of lookahead. Small targets can underrun; stop before changing. No measured latency guarantee.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 4)
                 }
-                if model.selectedBufferFrames < 256 {
-                    Label("Small bridge fill leaves little AU scheduling margin. If glitches increase, stop and try 256 or 512 frames here; device buffers are separate.", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
                 if model.showDebugInformation, model.routingRequested, let metrics = model.engineSnapshot {
-                    Text("Drift command: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm · rebuffers \(metrics.rebufferEvents) · recentered \(metrics.recenterFrames) frames")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    Text("\(metrics.bufferedFrames) / \(metrics.capacity) frames · \(metrics.primed ? "Ready" : "Filling") · underrun \(metrics.underrunFrames) · overrun \(metrics.overrunFrames)")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Divider()
+                    ReadoutRow("FIFO", "\(metrics.bufferedFrames) / \(metrics.capacity) frames").font(.caption)
+                    ReadoutRow("Correction command", "\(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm").font(.caption)
+                    ReadoutRow("Underrun / overrun frames", "\(metrics.underrunFrames) / \(metrics.overrunFrames)").font(.caption)
                 }
             }.padding(4)
-        } label: {
-            HStack {
-                Text("Bridge FIFO reserve")
-                InfoButton(title: "Bridge FIFO reserve", message: "This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start. Smaller reserves reduce queue delay but leave less time for Audio Unit and scheduler delays.")
-            }
         }
     }
 }
@@ -197,10 +194,10 @@ struct OutputDeviceVolumeControl: View {
                     .font(.caption.monospacedDigit()).frame(width: 42, alignment: .trailing)
             }
             if !model.outputDeviceVolumeWritable {
-                Text(model.outputDeviceVolumeError ?? (model.outputDeviceVolume == nil
-                    ? "This output does not expose a master volume control."
-                    : "The output device volume control is read-only."))
-                    .font(.caption2).foregroundStyle(.secondary).padding(.leading, 88)
+                HStack {
+                    Text("Unavailable").font(.caption).foregroundStyle(.secondary)
+                    InfoButton(title: "Device volume", message: model.outputDeviceVolumeError ?? "This output does not expose a writable master volume control. Digital output gain remains separate.")
+                }
             }
         }
         .help("Controls the selected device's Core Audio master output volume. This is separate from Audio Bridge digital output gain and may also affect other system audio clients. The device may round the requested value to its supported steps.")

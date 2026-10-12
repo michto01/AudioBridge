@@ -7,6 +7,7 @@ struct DeviceIcon: View {
     let device: DeviceFacts
     let direction: AudioDirection
     let image: NSImage?
+    var size: CGFloat = NSFont.systemFontSize
 
     var body: some View {
         Group {
@@ -16,7 +17,7 @@ struct DeviceIcon: View {
                 Image(systemName: fallbackSymbol).resizable().scaledToFit()
             }
         }
-        .frame(width: NSFont.systemFontSize, height: NSFont.systemFontSize)
+        .frame(width: size, height: size)
         .clipped()
         .accessibilityHidden(true)
     }

@@ -4,6 +4,12 @@
 
 Native macOS controls, compact spacing, restrained status colors, no dashboard clutter. Use system materials and SF Symbols. Follow system light/dark appearance and accessibility settings. Status must not be color-only.
 
+Group titles use a larger bold heading above the controls. Each settings group has an `(i)` button for explanations, limitations and detailed state; long notes do not occupy the main control surface. Keep the single Bridge status badge and one listener status per Remote group visible. Current delivery-warning causes remain directly readable in Diagnostics. Info popovers allow text selection and scroll within a bounded height.
+
+Bridge device icons explicitly fit a 42-point square; device pickers retain compact icons. The endpoint layout measures both cards at the same column width, uses the larger intrinsic height for both and aligns their tops and bottoms. Extra output-device volume controls determine the necessary height rather than a fixed empty-space allowance. Headers, meters and trim rows align between the cards.
+
+Diagnostics groups delivery, queues/clocks, Audio Unit timing, signal levels and recovery into labeled value rows. Copy Status has the same distinct report sections. Keep device catalog and session history expandable instead of interleaving technical paragraphs with controls.
+
 ## Menu-bar popover (primary)
 
 ```

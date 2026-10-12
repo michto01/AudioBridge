@@ -852,60 +852,87 @@ final class AppModel: ObservableObject {
         } catch { self.error = "Unable to export device facts: \(error)" }
     }
     func copyStatus() {
-        var lines = ["Audio Bridge status",
-            "Version: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") / build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development")",
-            "Time: \(ISO8601DateFormatter().string(from: Date()))",
-            "Bundle: \(Bundle.main.bundlePath)", "Status: \(status)", "Microphone permission: \(permission)",
-            "Routing requested: \(routingRequested); transitioning: \(routingTransitioning)"]
-        let retrySeconds = recovery.retryAt.map { String(max(0, $0 - ProcessInfo.processInfo.systemUptime)) } ?? "none"
-        lines.append("Desired routing: \(recovery.desired); resume at launch: \(resumeAtLaunch); recovery blocked: \(recovery.blocked); backoff stage: \(recovery.attempts); retry in: \(retrySeconds) seconds; restart required: \(restartRequired)")
-        if let lastRecoveryFault { lines.append("Last recovery fault: \(lastRecoveryFault)") }
-        lines.append(contentsOf: recoveryHistory.suffix(10).map { "Recovery event: \($0)" })
-        if let routingFault { lines.append("Routing fault: \(routingFault)") }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development"
+        var lines = ["Audio Bridge status", "Version: \(version) / build \(build)", "Time: \(ISO8601DateFormatter().string(from: Date()))"]
+        func section(_ title: String, _ rows: [String]) { lines += ["", title] + rows }
+        func decimal(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) }
+
+        section("APPLICATION", ["Status: \(status)", "Bundle: \(Bundle.main.bundlePath)", "Microphone permission: \(permission)",
+            "Routing requested: \(routingRequested)", "Transitioning: \(routingTransitioning)"])
+        if let routingFault { lines.append("Current fault: \(routingFault)") }
         if let error { lines.append("Settings error: \(error)") }
         if let startUnavailableReason, !routingRequested { lines.append("Start unavailable: \(startUnavailableReason)") }
+
         for direction in AudioDirection.allCases {
             let selected = endpoint(direction), selectedDevice = device(direction)
-            let rate = (selectedDevice?.nominalSampleRate).map { String($0) } ?? "unknown"
-            let frames = (selectedDevice?.bufferFrames).map { String($0) } ?? "unknown"
-            lines.append("\(direction.rawValue.capitalized): \(selectedDevice?.name ?? "Unavailable/unconfigured") [UID: \(selected.uid ?? "none")] · rate \(rate) Hz · buffer \(frames) frames")
+            let rate = selectedDevice?.nominalSampleRate.map { "\(decimal($0 / 1000)) kHz" } ?? "Unknown"
+            section(direction.rawValue.uppercased() + " DEVICE", [
+                "Name: \(selectedDevice?.name ?? "Unavailable / unconfigured")",
+                "UID: \(selected.uid ?? "None")", "Sample rate: \(rate)",
+                "Interface buffer: \(selectedDevice?.bufferFrames.map(String.init) ?? "Unknown") frames"])
         }
-        lines.append("Input matrix: " + selection.inputMix.map { "ch\($0.channel) → L \($0.left), R \($0.right)" }.joined(separator: "; "))
-        lines.append("Output map: " + selection.outputMap.map { "ch\($0.channel) ← \($0.source.label)" }.joined(separator: "; "))
-        lines.append("Linked input trim: \(inputTrim) dB; output gain: \(outputGain) dB")
-        let deviceVolume = outputDeviceVolume.map { "\(($0 * 100).formatted(.number.precision(.fractionLength(0))))%" } ?? "unavailable"
-        lines.append("Output device volume: \(deviceVolume); writable: \(outputDeviceVolumeWritable); error: \(outputDeviceVolumeError ?? "none")")
+        section("ROUTING", selection.inputMix.map { "Input ch\($0.channel) → Mix L: \($0.left), Mix R: \($0.right)" }
+            + selection.outputMap.map { "Output ch\($0.channel) ← \($0.source.label)" })
+        let deviceVolume = outputDeviceVolume.map { "\(Int(($0 * 100).rounded()))%" } ?? "Unavailable"
         let hogMask = engineSnapshot?.exclusiveAccessMask ?? 0
-        lines.append("Exclusive access requested: \(exclusiveAccessEnabled); input held: \((hogMask & 1) != 0); output held: \((hogMask & 2) != 0)")
-        lines.append("AU chain bypassed: \(chainBypassed); effects: " + auChain.effects.map { "\($0.name) [\($0.enabled ? "enabled" : "disabled")]" }.joined(separator: " → "))
+        section("LEVELS & DEVICE ACCESS", ["Input trim: \(inputTrim) dB", "Output gain: \(outputGain) dB",
+            "Output device volume: \(deviceVolume)", "Device volume writable: \(outputDeviceVolumeWritable)",
+            "Device volume error: \(outputDeviceVolumeError ?? "None")", "Exclusive access requested: \(exclusiveAccessEnabled)",
+            "Exclusive input / output held: \((hogMask & 1) != 0) / \((hogMask & 2) != 0)"])
+        section("EFFECTS", ["Whole chain bypassed: \(chainBypassed)"] + auChain.effects.enumerated().map {
+            "\($0.offset + 1). \($0.element.name) [\($0.element.enabled ? "enabled" : "disabled")]"
+        })
+
         if let s = engineSnapshot {
-            lines += ["Input/output callbacks: \(s.inputCallbacks) / \(s.outputCallbacks)",
-                "Captured/rendered frames: \(s.inputFrames) / \(s.outputFrames); AU processed: \(s.auProcessedFrames)",
-                "Callbacks fresh input/output: \(s.inputActive) / \(s.outputActive); primed: \(s.primed)",
-                "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); queue reserve: \(s.targetFrames)",
-                "Pending source frames (accepted capture minus consumed/discarded source): \(s.pendingSourceFrames)",
-                "Underrun/overrun: \(s.underrunFrames) / \(s.overrunFrames); format faults: \(s.formatFaults)",
-                "Measured input/output clock difference: \(s.clockEstimateValid ? "\(s.measuredClockDifferencePPM) ppm" : "unavailable"); drift correction commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
-                "Drift controller saturated callbacks: \(s.driftSaturatedCallbacks)",
-                "Drift applied (last callback): \(s.appliedDriftPPM) ppm; controller held: \(s.driftHeldCallbacks) callbacks; unity limited: \(s.driftLimitedCallbacks) callbacks; refill threshold: \(s.refillThresholdFrames) frames",
-                "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
-        } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }
-        if let s = engineSnapshot, let estimate = delayEstimate {
-            lines.append("Recent delivery warning: \(s.recentGlitches); reason: \(s.deliveryWarningReason ?? "none"); continuously healthy: \(s.glitchCleanSeconds) / 5 seconds; counters remain cumulative")
-            let bridge = estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map(String.init(describing:)) ?? "unknown"
-            let hardware = estimate.subtotalMilliseconds(categories: [.deviceReported]).map(String.init(describing:)) ?? "unknown"
-            lines.append("Delay bridge + callback buffers: \(bridge) ms; device-reported: \(hardware) ms")
-            lines.append("Delay model: \(routingRequested ? "live" : "last run"); \(s.primed ? "primed" : "startup"); estimated allowances, not measured end-to-end")
-            for row in estimate.components {
-                let value = row.frames.map { "\($0) frames / \(estimate.milliseconds($0) ?? 0) ms" } ?? "unknown"
-                lines.append("Delay — \(row.label): \(value)")
+            section("DELIVERY", ["Recent warning: \(s.recentGlitches)", "Warning reason: \(s.deliveryWarningReason ?? "None")",
+                "Continuously healthy: \(decimal(s.glitchCleanSeconds)) seconds (warning clears at 5 seconds)",
+                "Input callbacks: \(s.inputCallbacks)", "Output callbacks: \(s.outputCallbacks)",
+                "Fresh input / output callbacks: \(s.inputActive) / \(s.outputActive)", "Primed: \(s.primed)",
+                "Captured frames: \(s.inputFrames)", "Rendered frames: \(s.outputFrames)",
+                "Underrun frames: \(s.underrunFrames)", "Overrun frames: \(s.overrunFrames)", "Format faults: \(s.formatFaults)",
+                "Counters remain cumulative for this run."])
+            section("QUEUES", ["FIFO queued / capacity: \(s.bufferedFrames) / \(s.capacity) frames",
+                "Reserve target: \(s.targetFrames) frames", "Pending source: \(s.pendingSourceFrames) frames",
+                "Capture queue: \(s.captureQueueFrames) frames", "AU in flight: \(s.auInFlightFrames) frames",
+                "Processed queue: \(s.processedQueueFrames) frames", "Refill threshold: \(s.refillThresholdFrames) frames",
+                "Observed queue min / max: \(s.queueLowFrames.map(String.init) ?? "Unknown") / \(s.queueHighFrames.map(String.init) ?? "Unknown") frames",
+                "Rebuffer events: \(s.rebufferEvents)", "Recentered frames: \(s.recenterFrames)"])
+            section("CLOCKS", ["Measured input / output difference: \(s.clockEstimateValid ? "\(decimal(Double(s.measuredClockDifferencePPM))) ppm" : "Unavailable")",
+                "Commanded correction: \(decimal(Double(s.driftPPM))) ppm", "Applied correction (last callback): \(decimal(Double(s.appliedDriftPPM))) ppm",
+                "Saturated callbacks: \(s.driftSaturatedCallbacks)", "Held callbacks: \(s.driftHeldCallbacks)", "Limited callbacks: \(s.driftLimitedCallbacks)"])
+            let mean = s.auRenderBlocks > 0 ? "\(decimal(Double(s.auRenderNanoseconds) / Double(s.auRenderBlocks) / 1e6)) ms" : "Unavailable"
+            section("AU PROCESSING", ["Processed frames: \(s.auProcessedFrames)", "Declared plugin latency: \(decimal(Double(s.auLatencySeconds) * 1000)) ms",
+                "Block size: \(s.auBlockFrames) frames", "Timed blocks: \(s.auRenderBlocks)",
+                "Block budget: \(decimal(Double(s.auBlockBudgetNanoseconds) / 1e6)) ms",
+                "Wall time last: \(decimal(Double(s.auLastRenderNanoseconds) / 1e6)) ms", "Wall time mean: \(mean)",
+                "Wall time maximum: \(decimal(Double(s.auMaxRenderNanoseconds) / 1e6)) ms",
+                "Over-budget blocks: \(s.auRenderOverBudgetBlocks)", "Worker polling waits: \(s.auWorkerWaits)",
+                "Late worker wakeups: \(s.auWorkerLateWakeups)", "Maximum wake lateness: \(decimal(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms",
+                "Wall time includes scheduling and is separate from signal delay."])
+            section("SIGNAL", ["Input full-scale samples L / R: \(s.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))",
+                "Output full-scale samples L / R: \(s.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))",
+                "Raw input full-scale samples: \(s.rawInputClips.map(String.init).joined(separator: " / "))",
+                "Physical output peak (linear): \(s.physicalOutputPeak)", "Physical output full-scale samples: \(s.physicalOutputClips)"])
+            if let estimate = delayEstimate {
+                let bridge = estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { decimal($0) + " ms" } ?? "Unknown"
+                let hardware = estimate.subtotalMilliseconds(categories: [.deviceReported]).map { decimal($0) + " ms" } ?? "Unknown"
+                section("DELAY ESTIMATE", ["Snapshot: \(routingRequested ? "Live" : "Last run") · \(s.primed ? "primed" : "starting")",
+                    "Bridge + callback buffers: \(bridge)", "Device-reported: \(hardware)",
+                    "Known subtotal: \(decimal(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms", "Complete: \(estimate.complete)"])
+                for row in estimate.components {
+                    lines.append("\(row.label): " + (row.frames.map { "\(decimal(estimate.milliseconds($0) ?? 0)) ms · \(decimal($0)) frames" } ?? "Unknown"))
+                }
+                lines.append("Estimated allowances; physical end-to-end delay is not measured.")
             }
-            lines.append("Delay known subtotal: \(estimate.milliseconds(estimate.knownFrames) ?? 0) ms; complete: \(estimate.complete)")
-            lines.append("Queue + in-flight min/max (primed 20 Hz samples): \(s.queueLowFrames.map(String.init) ?? "unknown") / \(s.queueHighFrames.map(String.init) ?? "unknown") frames")
-            lines.append("AU block: \(s.auBlockFrames) frames; timed blocks: \(s.auRenderBlocks); wall last/total/max: \(s.auLastRenderNanoseconds) / \(s.auRenderNanoseconds) / \(s.auMaxRenderNanoseconds) ns (separate from signal delay)")
-            lines.append("AU worker: dedicated thread (QoS userInteractive; no deadline guarantee); block budget: \(s.auBlockBudgetNanoseconds) ns; over-budget blocks: \(s.auRenderOverBudgetBlocks); polling waits: \(s.auWorkerWaits); wake lateness over block budget: \(s.auWorkerLateWakeups); max wake lateness: \(s.auMaxWorkerWakeLatenessNanoseconds) ns")
-        }
-        lines.append("Local diagnostics only; no audio samples or plugin state included.")
+        } else { section("DELIVERY", ["No engine snapshot available."]) }
+
+        let retrySeconds = recovery.retryAt.map { decimal(max(0, $0 - ProcessInfo.processInfo.systemUptime)) + " seconds" } ?? "No pending retry"
+        section("RECOVERY", ["Desired routing: \(recovery.desired)", "Resume at launch: \(resumeAtLaunch)",
+            "Blocked: \(recovery.blocked)", "Backoff stage: \(recovery.attempts)", "Retry: \(retrySeconds)",
+            "Restart required: \(restartRequired)", "Last recovery fault: \(lastRecoveryFault ?? "None")"])
+        lines.append(contentsOf: recoveryHistory.suffix(10).map { "Event: \($0)" })
+        lines += ["", "Local diagnostics only; no audio samples or plugin state included."]
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }

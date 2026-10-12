@@ -10,6 +10,18 @@ extension AppModel {
             auLatencySeconds: Double(s.auLatencySeconds), bypassed: s.chainBypassed,
             pendingSourceFrames: s.pendingSourceFrames)
     }
+    var bridgeStatusHelp: String {
+        var lines = ["Current status: \(status)"]
+        if let fault = routingFault { lines.append(fault) }
+        if let inputIssue { lines.append("Input: \(inputIssue)") }
+        if let outputIssue { lines.append("Output: \(outputIssue)") }
+        if !routingRequested, let reason = startUnavailableReason { lines.append("Start unavailable: \(reason)") }
+        if routingRequested, let s = engineSnapshot, s.recentGlitches {
+            lines.append("\(s.deliveryWarningReason ?? "Audio delivery was interrupted"). Clears after five healthy seconds. Diagnostics shows the loss counts and clean-time progress.")
+        }
+        lines.append("Start opens your explicitly selected route. Stop cancels recovery and stays stopped after relaunch. Click a device header to configure it in Audio. Set physical patches in Routing, plugins in Effects and launch behavior in General. Running confirms local callbacks, not upstream transport or downstream sound.")
+        return lines.joined(separator: "\n\n")
+    }
 }
 
 struct PlaybackView: View {
@@ -21,40 +33,32 @@ struct PlaybackView: View {
                 HStack(spacing: 10) {
                     Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 32, height: 32)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Audio Bridge").font(.title3.weight(.semibold))
+                        Text("Audio Bridge").font(.title2.weight(.bold))
                         Text("Reliable audio routing for live production").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     RoutingStatusLabel(model: model).font(.headline)
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(.quaternary, in: Capsule())
+                    InfoButton(title: "Bridge status", message: model.bridgeStatusHelp)
                 }
-                HStack(alignment: .center, spacing: 8) {
+                BridgeEndpointLayout {
                     PlaybackEndpointCard(model: model, direction: .input, selectAudio: selectAudio)
                     Image(systemName: "arrow.right").font(.title2.weight(.semibold)).foregroundStyle(.secondary)
                         .accessibilityLabel("routes to")
                     PlaybackEndpointCard(model: model, direction: .output, selectAudio: selectAudio)
                 }
-                if model.routingRequested, let started = model.routingStartedAt {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text("Running for \(elapsed(context.date.timeIntervalSince(started)))")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                }
-                if let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
-                    Text("Delivery warning: \(s.deliveryWarningReason ?? "Audio delivery was interrupted") · clears after 5 healthy seconds (\(Int(min(5, s.glitchCleanSeconds)))/5 s).")
-                        .font(.caption).foregroundStyle(.orange)
-                }
                 HStack {
                     RoutingToggleButton(model: model)
-                }
-                if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
-                if !model.routingRequested, let reason = model.startUnavailableReason {
-                    Text("Start unavailable: \(reason)").font(.caption).foregroundStyle(.secondary)
+                    if model.routingRequested, let started = model.routingStartedAt {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(elapsed(context.date.timeIntervalSince(started)))
+                                .monospacedDigit().foregroundStyle(.secondary)
+                                .accessibilityLabel("Running for \(elapsed(context.date.timeIntervalSince(started)))")
+                        }
+                    }
                 }
                 DelayView(model: model)
-                Text("Stop cancels recovery and stays stopped after relaunch. Configure devices and buffers in Audio, patches in Routing, plugins in Effects and launch behavior in General.")
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
     }
@@ -85,23 +89,22 @@ private struct PlaybackEndpointCard: View {
     let selectAudio: () -> Void
     private var device: DeviceFacts? { model.device(direction) }
     var body: some View {
-        GroupBox {
+        InfoGroupBox(direction == .input ? "Input" : "Output", message: endpointHelp) {
             VStack(alignment: .leading, spacing: 8) {
                 Button(action: selectAudio) {
                 HStack(spacing: 12) {
                     if let device {
-                        DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid])
-                            .frame(width: 42, height: 42)
+                        DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid], size: 42)
                     } else {
                         Image(systemName: direction == .input ? "mic" : "speaker.wave.2")
-                            .font(.system(size: 28)).frame(width: 42, height: 42)
+                            .resizable().scaledToFit().frame(width: 42, height: 42)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(direction == .input ? "INPUT DEVICE" : "OUTPUT DEVICE")
-                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                         Text(device?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
-                            .font(.headline).lineLimit(1).truncationMode(.middle)
+                            .font(.headline).lineLimit(2).frame(height: 42, alignment: .leading)
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain).contentShape(Rectangle())
                 if let device {
@@ -121,6 +124,10 @@ private struct PlaybackEndpointCard: View {
         }
         .frame(maxWidth: .infinity)
     }
+    private var endpointHelp: String {
+        let shared = "Click the device name or icon to open Audio configuration. Meters show measured stereo Mix L/R peaks; CLIP is a signal-level indication and holds briefly. Inactive means routing is stopped or callbacks are not fresh. Digital trim changes both channels smoothly and cannot undo clipping already present at capture."
+        return direction == .input ? shared : shared + "\n\nDevice volume controls the selected device's master volume separately from digital output gain. It remains usable during exclusive access when the driver supports it. " + (model.outputDeviceVolumeError ?? "")
+    }
     private func rate(_ value: Double?) -> String {
         guard let value else { return "Unknown rate" }
         let kilohertz = value / 1000
@@ -134,78 +141,54 @@ private struct DelayView: View {
     @State private var bridgeSamples: [(Date, Double)] = []
     @State private var averagedBridgeMilliseconds: Double?
     @State private var delayAverageReady = false
+
     var body: some View {
-        GroupBox("Delay & processing") {
-            VStack(alignment: .leading, spacing: 8) {
-                if let s = model.engineSnapshot, let estimate = model.delayEstimate {
-                    Text(model.routingRequested ? (s.primed ? "Live estimate" : "Startup — estimate not steady") : "Last run snapshot")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(delayAverageReady
-                        ? averagedBridgeMilliseconds.map { "Bridge + callback buffers: ~\(number($0)) ms average (5 s)" } ?? "Bridge + callback buffers: incomplete estimate"
-                        : estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { "Bridge + callback buffers: ~\(number($0)) ms · smoothing over 5 s" }
-                            ?? "Bridge + callback buffers: incomplete estimate")
-                        .font(.headline)
-                    if model.showDebugInformation {
-                    Text(estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "Device-reported delay: \(number($0)) ms" } ?? "Device-reported delay: Unknown / incomplete")
-                    Text(estimate.totalMilliseconds.map { "Combined accounting estimate: ~\(number($0)) ms" }
-                        ?? "Combined known subtotal: \(number(estimate.milliseconds(estimate.knownFrames) ?? 0)) ms · incomplete")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("Pending source audio: \(s.pendingSourceFrames) frames · capture \(s.captureQueueFrames), AU in flight \(s.auInFlightFrames), processed \(s.processedQueueFrames) (individual snapshots approximate)")
-                        .font(.caption.monospacedDigit())
-                    if let low = s.queueLowFrames, let high = s.queueHighFrames {
-                        Text("Pending source range: \(low)–\(high) frames / \(number(Double(low) / s.sampleRate * 1000))–\(number(Double(high) / s.sampleRate * 1000)) ms")
-                            .font(.caption.monospacedDigit())
-                    }
-                    if s.auRenderBlocks > 0 {
-                        Text("AU block wall time: last \(number(Double(s.auLastRenderNanoseconds) / 1e6)), mean \(number(Double(s.auRenderNanoseconds) / Double(s.auRenderBlocks) / 1e6)), max \(number(Double(s.auMaxRenderNanoseconds) / 1e6)) ms")
-                            .font(.caption.monospacedDigit())
-                    } else { Text("AU block timing: awaiting processing").font(.caption) }
-                    Text("Processing block: \(s.auBlockFrames) frames / \(number(Double(s.auBlockFrames) / s.sampleRate * 1000)) ms · \(s.auRenderBlocks) blocks timed")
-                        .font(.caption.monospacedDigit())
-                    DisclosureGroup("Buffer delivery diagnostics") {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Measured input/output clock difference: \(s.clockEstimateValid ? "\(number(Double(s.measuredClockDifferencePPM))) ppm" : "unavailable") · correction command / applied: \(number(Double(s.driftPPM))) / \(number(Double(s.appliedDriftPPM))) ppm")
-                            Text("Controller held: \(s.driftHeldCallbacks) · unity limited: \(s.driftLimitedCallbacks) callbacks")
-                            Text("Correction command saturated: \(s.driftSaturatedCallbacks) callbacks")
-                            Text("Current refill threshold: \(s.refillThresholdFrames) frames")
-                            Text("AU blocks over duration budget: \(s.auRenderOverBudgetBlocks) / \(s.auRenderBlocks)")
-                            Text("Polling wakeups late by more than a block: \(s.auWorkerLateWakeups) / \(s.auWorkerWaits)")
-                            Text("Maximum wake lateness: \(number(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms")
-                            Text("Wall time includes preemption. Counters are clues, not proof of an audible glitch or measured clock skew. Applied correction is the last callback sample; zero while refilling.")
-                                .foregroundStyle(.secondary)
-                        }.font(.caption.monospacedDigit()).padding(.top, 4)
-                    }
-                    DisclosureGroup("Delay breakdown") {
-                        VStack(spacing: 5) {
-                            ForEach(estimate.components) { row in
-                                HStack {
-                                    Text(row.label)
-                                    Spacer()
-                                    Text(row.frames.map { "\(number($0)) fr · \(number(estimate.milliseconds($0) ?? 0)) ms" } ?? "Unknown")
-                                        .monospacedDigit()
-                                }.font(.caption)
-                            }
-                        }.padding(.top, 4)
-                    }
-                    Text("Small callback buffers reduce the bridge allowance; they do not remove internal latency reported by the device/stream. The combined estimate includes those reports. Startup fill is not added again. Unknown properties stay unknown. AU wall processing time is separate. True end-to-end latency requires loopback measurement.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Text("Estimate only. Actual end-to-end delay requires loopback measurement.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("Start routing to observe queues and AU processing times. No measured delay is available yet.")
-                        .font(.caption).foregroundStyle(.secondary)
+        InfoGroupBox("Delay", message: delayHelp) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Bridge + callback buffers").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(bridgeMilliseconds.map { "~\(number($0)) ms" } ?? "—")
+                        .font(.title2.weight(.semibold)).monospacedDigit()
                 }
-            }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
+                if model.showDebugInformation, let s = model.engineSnapshot, let estimate = model.delayEstimate {
+                    Divider()
+                    ReadoutRow("Device-reported delay", estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "\(number($0)) ms" } ?? "Unknown")
+                    ReadoutRow("Combined estimate", estimate.totalMilliseconds.map { "~\(number($0)) ms" } ?? "Incomplete")
+                    ReadoutRow("Pending source", "\(s.pendingSourceFrames) frames")
+                    ReadoutRow("AU block", "\(s.auBlockFrames) frames")
+                    if s.auRenderBlocks > 0 {
+                        ReadoutRow("AU mean processing time", "\(number(Double(s.auRenderNanoseconds) / Double(s.auRenderBlocks) / 1e6)) ms")
+                    }
+                    DisclosureGroup("Delay components") {
+                        VStack(spacing: 8) {
+                            ForEach(estimate.components) { row in
+                                ReadoutRow(row.label, row.frames.map { "\(number(estimate.milliseconds($0) ?? 0)) ms · \(number($0)) frames" } ?? "Unknown")
+                            }
+                        }.font(.callout).padding(.top, 8)
+                    }
+                }
+            }
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
-            guard let value = model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]) else { return }
+            guard model.routingRequested, model.engineSnapshot?.primed == true,
+                  let value = model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]) else { return }
             bridgeSamples = bridgeSamples.filter { date.timeIntervalSince($0.0) <= 5 } + [(date, value)]
             averagedBridgeMilliseconds = bridgeSamples.map(\.1).reduce(0, +) / Double(bridgeSamples.count)
             delayAverageReady = bridgeSamples.count >= 5
         }
-        .onChange(of: model.routingStartedAt) { _, _ in bridgeSamples.removeAll(); averagedBridgeMilliseconds = nil; delayAverageReady = false }
+        .onChange(of: model.routingStartedAt) { _, _ in
+            bridgeSamples.removeAll(); averagedBridgeMilliseconds = nil; delayAverageReady = false
+        }
     }
-    private func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) }
+    private var bridgeMilliseconds: Double? {
+        delayAverageReady ? averagedBridgeMilliseconds : model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer])
+    }
+    private var delayHelp: String {
+        let observation = model.engineSnapshot.map {
+            model.routingRequested ? ($0.primed ? "Live estimate, averaged over five seconds." : "Starting; the estimate is not steady yet.") : "Last run snapshot."
+        } ?? "Start routing to obtain an estimate."
+        return observation + "\n\nThe main value includes callback buffers, software queues, resampler lookahead and declared AU signal latency. Device and stream latency reports add a separate allowance; small buffers do not remove that internal delay. Missing reports remain unknown. Startup reserve is not added twice. AU processing wall time is performance telemetry and is not added to signal delay.\n\nActual end-to-end latency requires a loopback measurement. Enable interface debug information in Diagnostics for the accounting breakdown."
+    }
+    private func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(1))) }
 }

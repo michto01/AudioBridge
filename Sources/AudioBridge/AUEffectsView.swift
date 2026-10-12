@@ -4,7 +4,7 @@ import SwiftUI
 struct AUEffectsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        GroupBox("Audio Unit effects") {
+        InfoGroupBox("Audio Unit effects", message: effectsHelp) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Menu("Add effect…") {
@@ -21,9 +21,6 @@ struct AUEffectsView: View {
                         ProgressView().controlSize(.small)
                         Text("Scanning effects in background… \(model.auScanCount) found").font(.caption)
                     }
-                } else if let date = model.auCatalogScannedAt {
-                    Text("Cached list: \(model.auCatalog.count) effects · scanned \(date.formatted(date: .abbreviated, time: .shortened)). Rescan after installing effects.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = model.auScanError { Text(error).font(.caption).foregroundStyle(.orange) }
                 ForEach(Array(model.auChain.effects.enumerated()), id: \.element.id) { index, effect in
@@ -42,22 +39,19 @@ struct AUEffectsView: View {
                     }.disabled(!model.canEditAU)
                 }
                 if model.auChain.effects.isEmpty {
-                    Text("No effects. Add an installed stereo AU compressor or limiter.").font(.caption).foregroundStyle(.secondary)
+                    Text("No effects inserted").foregroundStyle(.secondary)
                 }
                 if model.auEditorOpen {
                     HStack {
-                        Text(model.routingRequested ? "AU editor open — controls affect routing immediately; close to save." : "AU editor open — save settings before Start.").font(.caption)
                         Button("Close editor") { model.cancelAUEditor() }
                     }
                 }
                 if model.auUpdating { Text("Preparing live chain update…").font(.caption) }
-                if let metrics = model.engineSnapshot, model.routingRequested, !model.auChain.active.isEmpty {
-                    Text("AU frames: \(metrics.auProcessedFrames) · reported plugin latency: \((Double(metrics.auLatencySeconds) * 1000).formatted(.number.precision(.fractionLength(1)))) ms")
-                        .font(.caption.monospacedDigit())
-                }
-                Text("Input trim → effects in listed order → output gain. Bypass outputs dry audio while effects remain editable and processing. Live inserts switch at a block boundary; audible transitions are possible. Drift/recovery validation remains pending.")
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding(4)
         }
+    }
+    private var effectsHelp: String {
+        let catalog = model.auCatalogScannedAt.map { "Cached catalog: \(model.auCatalog.count) effects, scanned \($0.formatted(date: .abbreviated, time: .shortened))." } ?? "The catalog has not been scanned yet."
+        return "Physical input mix → input trim → effects in listed order → drift → output gain → physical outputs. Add installed stereo Audio Units, reorder them, or open Edit to adjust their parameters.\n\nBypass outputs dry audio while effects remain processing and editable. Live inserts switch at a processing boundary; audible transitions are possible. A live editor controls the rendering instance; close it to save its settings. Stopped editors save settings for the next Start.\n\n" + catalog + " Rescan after installing or removing effects. Detailed processing counters and latency reports are in Diagnostics."
     }
 }
