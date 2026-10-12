@@ -70,12 +70,17 @@ public enum CoreAudioCatalog {
         try check(AudioObjectSetPropertyData(device.runtimeID, &property, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value), device.runtimeID, property.mSelector)
         return try scalar(device.runtimeID, kAudioDevicePropertyBufferFrameSize, initial: UInt32(0))
     }
-    public static func snapshot() throws -> CatalogSnapshot {
+    /// Runtime monitoring still enumerates identities (including duplicate UIDs),
+    /// but only probes capabilities for the explicitly selected endpoints.
+    public static func snapshot(selectedUIDs: Set<String>? = nil) throws -> CatalogSnapshot {
         let ids: [UInt32] = try values(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
         var devices: [DeviceFacts] = []
         var issues: [String] = []
         for id in ids {
-            do { devices.append(try device(id)) }
+            do {
+                if let selectedUIDs, !selectedUIDs.contains(try string(id, kAudioDevicePropertyDeviceUID)) { continue }
+                devices.append(try device(id))
+            }
             catch { issues.append("Device \(id): \(error)") }
         }
         // Duplicate UIDs cannot safely represent an explicit endpoint selection.

@@ -274,7 +274,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         if fault == nil, Date().timeIntervalSince(lastDeviceCheck) >= 0.5 {
           lastDeviceCheck = Date()
           do {
-            let fresh = try CoreAudioCatalog.snapshot()
+            let fresh = try CoreAudioCatalog.snapshot(selectedUIDs: [plan.input.device.uid, plan.output.device.uid])
             let input = fresh.devices.first { $0.uid == plan.input.device.uid }
             let output = fresh.devices.first { $0.uid == plan.output.device.uid }
             if input?.alive != true || output?.alive != true

@@ -178,9 +178,7 @@ private struct SettingsView: View {
                                 }
                             }
                         }
-                        if let metrics = model.engineSnapshot {
-                            EngineDiagnosticsView(metrics: metrics)
-                        }
+                        LiveEngineDiagnostics(telemetry: model.telemetry)
                         InfoGroupBox("Recovery", message: "Desired routing and observed delivery are separate. Manual Stop cancels retries and persists stopped intent. Recoverable failures retry the same selected devices indefinitely with bounded backoff. Permission and configuration faults require action. The supervisor's backoff resets after 20 healthy seconds, separately from the five-second display-warning recovery.") {
                             VStack(spacing: 8) {
                                 ReadoutRow("Desired routing", model.recovery.desired ? "On" : "Off")

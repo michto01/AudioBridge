@@ -98,6 +98,8 @@ User-authorized usability follow-up: 0.5.2/build 25 replaces duplicated Remote e
 
 User-authorized visual correction: 0.5.3/build 26 gives Bridge icons an explicit 42-point size, measures equal endpoint heights from the larger card, introduces bold group headings and per-group info popovers, and structures diagnostics and Copy Status into labeled sections. See [visual correction results](ui-visual-correction-results.md). This is an operator-interface follow-up; Phase 5 operational acceptance remains pending.
 
+User-authorized CPU/card follow-up: 0.5.4/build 27 places channel/rate metadata beneath each device name, separates 20 Hz engine telemetry from configuration observation, and avoids no-op recovery publications. Read-only profiling of build 26 found high main-app CPU and substantial SwiftUI layout activity. An optimized release bundle is provided for comparison. See [CPU and device-card follow-up](cpu-device-card-results.md). CPU improvement and Phase 5 operational acceptance remain unverified.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

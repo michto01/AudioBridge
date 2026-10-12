@@ -102,17 +102,17 @@ private struct PlaybackEndpointCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(device?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
                             .font(.headline).lineLimit(2).frame(height: 42, alignment: .leading)
+                        if let device {
+                            Text("\(device.facts(for: direction).channelCount ?? 0) channels · \(rate(device.nominalSampleRate))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Device not connected").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain).contentShape(Rectangle())
-                if let device {
-                    Text("\(device.facts(for: direction).channelCount ?? 0) channels · \(rate(device.nominalSampleRate))")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Device not connected").font(.caption).foregroundStyle(.secondary)
-                }
                 SignalMeters(model: model, direction: direction)
                 GainControl(model: model, direction: direction)
                 if direction == .output {
@@ -138,9 +138,15 @@ private struct PlaybackEndpointCard: View {
 
 private struct DelayView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var telemetry: EngineTelemetry
     @State private var bridgeSamples: [(Date, Double)] = []
     @State private var averagedBridgeMilliseconds: Double?
     @State private var delayAverageReady = false
+
+    init(model: AppModel) {
+        self.model = model
+        telemetry = model.telemetry
+    }
 
     var body: some View {
         InfoGroupBox("Delay", message: delayHelp) {
@@ -151,7 +157,7 @@ private struct DelayView: View {
                     Text(bridgeMilliseconds.map { "~\(number($0)) ms" } ?? "—")
                         .font(.title2.weight(.semibold)).monospacedDigit()
                 }
-                if model.showDebugInformation, let s = model.engineSnapshot, let estimate = model.delayEstimate {
+                if model.showDebugInformation, let s = telemetry.snapshot, let estimate = model.delayEstimate {
                     Divider()
                     ReadoutRow("Device-reported delay", estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "\(number($0)) ms" } ?? "Unknown")
                     ReadoutRow("Combined estimate", estimate.totalMilliseconds.map { "~\(number($0)) ms" } ?? "Incomplete")

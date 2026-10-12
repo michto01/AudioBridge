@@ -2,6 +2,15 @@ import AudioBridgeEngine
 import Foundation
 import SwiftUI
 
+struct LiveEngineDiagnostics: View {
+    @ObservedObject var telemetry: EngineTelemetry
+    var body: some View {
+        if let metrics = telemetry.snapshot {
+            EngineDiagnosticsView(metrics: metrics)
+        }
+    }
+}
+
 /// Keep values in stable rows rather than making the operator parse sentences.
 struct EngineDiagnosticsView: View {
     let metrics: EngineSnapshot

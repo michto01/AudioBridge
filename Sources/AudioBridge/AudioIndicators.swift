@@ -31,11 +31,17 @@ struct InfoButton: View {
 
 struct SignalMeters: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var telemetry: EngineTelemetry
     let direction: AudioDirection
     @State private var clipUntil = [Date.distantPast, Date.distantPast]
     @State private var displayedDB = [-60.0, -60.0]
+    init(model: AppModel, direction: AudioDirection) {
+        self.model = model
+        self.direction = direction
+        telemetry = model.telemetry
+    }
     var body: some View {
-        let snapshot = model.engineSnapshot
+        let snapshot = telemetry.snapshot
         let fresh = model.routingRequested && snapshot?.fault == nil
             && (direction == .input ? snapshot?.inputActive == true : snapshot?.outputActive == true)
         let levels = direction == .input ? snapshot?.inputLevels : snapshot?.outputLevels
@@ -95,8 +101,13 @@ struct SignalMeters: View {
 
 struct BufferSettings: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var telemetry: EngineTelemetry
     @State private var expert = false
     @State private var custom = false
+    init(model: AppModel) {
+        self.model = model
+        telemetry = model.telemetry
+    }
     var body: some View {
         InfoGroupBox("Bridge FIFO reserve", message: "This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start.\n\nRefill waits for this reserve plus one output callback and FIR lookahead. Smaller reserves reduce queue delay but leave less time for Audio Units and scheduler delays. If delivery losses increase, stop and raise the reserve. The driver buffers remain separate. Expert presets and exact values are available below; the valid minimum follows the larger device buffer, at least 16 frames. Actual delay is shown in Bridge.") {
             VStack(alignment: .leading, spacing: 6) {
@@ -144,7 +155,7 @@ struct BufferSettings: View {
                         }.disabled(!model.canEditSelections)
                     }.padding(.top, 4)
                 }
-                if model.showDebugInformation, model.routingRequested, let metrics = model.engineSnapshot {
+                if model.showDebugInformation, model.routingRequested, let metrics = telemetry.snapshot {
                     Divider()
                     ReadoutRow("FIFO", "\(metrics.bufferedFrames) / \(metrics.capacity) frames").font(.caption)
                     ReadoutRow("Correction command", "\(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm").font(.caption)

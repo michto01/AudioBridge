@@ -8,6 +8,12 @@ import Combine
 import Foundation
 import Darwin
 
+/// Frequent meter/counter updates do not invalidate every settings tab.
+@MainActor
+final class EngineTelemetry: ObservableObject {
+    @Published var snapshot: EngineSnapshot?
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     // Inspection is opt-in for each launch; never clutter the default interface.
@@ -34,7 +40,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var deviceIcons: [String: NSImage] = [:]
     @Published private(set) var routingRequested = false
     @Published private(set) var routingTransitioning = false
-    @Published private(set) var engineSnapshot: EngineSnapshot?
+    let telemetry = EngineTelemetry()
+    private(set) var engineSnapshot: EngineSnapshot? {
+        get { telemetry.snapshot }
+        set {
+            let previousStatus = status
+            let previousActivity = activity
+            telemetry.snapshot = newValue
+            // Configuration views only need delivery-state transitions. Meters
+            // and diagnostics observe telemetry directly at the original cadence.
+            if status != previousStatus || activity != previousActivity { objectWillChange.send() }
+        }
+    }
     @Published private(set) var routingFault: String?
     @Published private(set) var bufferProfile: BufferProfile = .balanced
     @Published private(set) var customBufferFrames: UInt32?
@@ -321,7 +338,9 @@ final class AppModel: ObservableObject {
                 } else if AVAudioApplication.shared.recordPermission != .granted {
                     self.stopForActionRequired("Microphone permission is no longer granted. Restore permission before starting again.")
                 } else if snapshot.primed && snapshot.inputActive && snapshot.outputActive && !snapshot.recentGlitches {
-                    self.recovery.healthy(seconds: snapshot.glitchCleanSeconds)
+                    if self.recovery.attempts > 0 && snapshot.glitchCleanSeconds >= 20 {
+                        self.recovery.healthy(seconds: snapshot.glitchCleanSeconds)
+                    }
                 }
             }
         }, completion: { [weak self] result in
