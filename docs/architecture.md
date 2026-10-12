@@ -81,6 +81,10 @@ Supervisor and configuration changes execute on a single serialized actor/queue;
 
 Include `NSMicrophoneUsageDescription` for capture, test TCC authorization with the packaged bundle, and ensure `LSUIElement`/menu-bar behavior is correct. `SMAppService` login-item registration must be verified from a real signed app at a stable installation path. Do not assume direct `swift run` reproduces app-bundle behavior.
 
+## Remote control and reporting
+
+Opt-in HTTP/OSC listeners use Apple's Network framework; no third-party package is needed. HTTP exposes a JSON status snapshot and a small command set (Start, Stop, input/output gain, chain bypass) behind a random Keychain bearer token. OSC uses standard UDP messages, accepts commands only from explicitly allowlisted source IPs, and reports status/meters to a configured Companion host/port once per second. Listeners default off. HTTP is plain-text and intended only for a trusted local production network; bearer tokens are not protected from network sniffing. UDP OSC has no protocol authentication. No audio samples or plugin state are sent. See `docs/remote-control.md`.
+
 ## Hardware probe before implementation lock
 
 Create a small CLI tool or diagnostics screen that lists UIDs, transport types, stream/channel formats, nominal rates, supported buffers and permission status for all eligible Core Audio devices. Validate using at least built-in and independent external or virtual endpoints. Use findings to select exact HAL API surface. Do not claim a specific callback or AudioConverter configuration is supported without validating against the macOS SDK and hardware.

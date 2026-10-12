@@ -152,6 +152,7 @@ private struct SettingsView: View {
                 }.padding()
             }.tabItem { Label("Effects", systemImage: "slider.horizontal.3") }
             GeneralSettingsView(model: model).tabItem { Label("General", systemImage: "gearshape") }
+            RemoteSettingsView(remote: model.remoteControl).tabItem { Label("Remote", systemImage: "network") }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
@@ -205,11 +206,12 @@ private struct SettingsView: View {
             }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.title2)
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — Phase 4 experimental supervised routing")
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — experimental supervised routing")
                 Text("The bridge does not record or transmit audio. Third-party Audio Units run separately and control their own behavior.")
             }.padding().tabItem { Label("About", systemImage: "info.circle") }
         }
-        .padding().frame(width: 680, height: 580)
+        .frame(minWidth: 760, minHeight: 560)
+        .padding().frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
         .onAppear { model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.checkPermission()

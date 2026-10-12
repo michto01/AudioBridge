@@ -17,7 +17,23 @@ struct PlaybackView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                RoutingStatusLabel(model: model).font(.headline)
+                HStack(spacing: 10) {
+                    Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Audio Bridge").font(.title3.weight(.semibold))
+                        Text("Reliable audio routing for live production").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    RoutingStatusLabel(model: model).font(.headline)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.quaternary, in: Capsule())
+                }
+                HStack(alignment: .center, spacing: 8) {
+                    PlaybackEndpointCard(model: model, direction: .input)
+                    Image(systemName: "arrow.right").font(.title2.weight(.semibold)).foregroundStyle(.secondary)
+                        .accessibilityLabel("routes to")
+                    PlaybackEndpointCard(model: model, direction: .output)
+                }
                 if model.showDebugInformation, let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
                     Text("Delivery warning clears after 20 healthy seconds · \(Int(min(20, s.glitchCleanSeconds)))/20 s. Historical counters remain in Diagnostics.")
                         .font(.caption).foregroundStyle(.orange)
@@ -34,19 +50,49 @@ struct PlaybackView: View {
                 if !model.routingRequested, let reason = model.startUnavailableReason {
                     Text("Start unavailable: \(reason)").font(.caption).foregroundStyle(.secondary)
                 }
-                ForEach(AudioDirection.allCases, id: \.self) { direction in
-                    GroupBox("\(direction.rawValue.capitalized) · \(model.device(direction)?.name ?? "Unconfigured")") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            GainControl(model: model, direction: direction)
-                            SignalMeters(model: model, direction: direction)
-                        }.padding(4)
-                    }
-                }
                 DelayView(model: model)
                 Text("Experimental supervised routing. Stop cancels recovery and stays stopped after relaunch. Configure devices/buffers in Audio, patches in Routing, plugins in Effects and launch behavior in General.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
+    }
+}
+
+private struct PlaybackEndpointCard: View {
+    @ObservedObject var model: AppModel
+    let direction: AudioDirection
+    private var device: DeviceFacts? { model.device(direction) }
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    if let device {
+                        DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid])
+                            .frame(width: 20, height: 20)
+                    } else {
+                        Image(systemName: direction == .input ? "mic" : "speaker.wave.2")
+                            .frame(width: 20, height: 20)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(direction == .input ? "INPUT DEVICE" : "OUTPUT DEVICE")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(device?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
+                            .font(.headline).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                if let device {
+                    Text("\(device.facts(for: direction).channelCount ?? 0) channels · \((device.nominalSampleRate ?? 0).formatted(.number.precision(.fractionLength(0)))) Hz")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Device not connected").font(.caption).foregroundStyle(.secondary)
+                }
+                SignalMeters(model: model, direction: direction)
+                GainControl(model: model, direction: direction)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(3)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

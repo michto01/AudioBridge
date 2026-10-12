@@ -6,6 +6,7 @@ struct SignalMeters: View {
     @ObservedObject var model: AppModel
     let direction: AudioDirection
     @State private var clipUntil = [Date.distantPast, Date.distantPast]
+    @State private var displayedDB = [-60.0, -60.0]
     var body: some View {
         let snapshot = model.engineSnapshot
         let fresh = model.routingRequested && snapshot?.fault == nil
@@ -21,8 +22,16 @@ struct SignalMeters: View {
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
                             Capsule().fill(.quaternary)
-                            Capsule().fill(db >= 0 ? Color.red : (db > -6 ? Color.orange : Color.green))
-                                .frame(width: geometry.size.width * (fresh ? min(1, max(0, (db + 60) / 60)) : 0))
+                            GeometryReader { bar in
+                                HStack(spacing: 0) {
+                                    Color.green.frame(width: bar.size.width * 0.90)
+                                    Color.yellow.frame(width: bar.size.width * 0.08)
+                                    Color.red.frame(maxWidth: .infinity)
+                                }
+                            }
+                            .mask(alignment: .leading) {
+                                Capsule().frame(width: geometry.size.width * (fresh ? min(1, max(0, (displayedDB[lane] + 60) / 60)) : 0))
+                            }
                         }
                     }.frame(height: 8)
                     Text(fresh ? (db.isFinite ? String(format: "%.1f dBFS", db) : "−∞ dBFS") : "Inactive")
@@ -36,6 +45,21 @@ struct SignalMeters: View {
         .onChange(of: levels?.map(\.clippedSamples)) { old, new in
             for lane in 0..<2 where (new?[lane] ?? 0) > (old?[lane] ?? 0) {
                 clipUntil[lane] = Date().addingTimeInterval(1)
+            }
+        }
+        .onChange(of: levels?.map(\.decibels)) { _, new in
+            for lane in 0..<2 {
+                let reading = new.flatMap { $0.indices.contains(lane) ? $0[lane] : nil } ?? -.infinity
+                let target = reading.isFinite ? min(0, max(-60, reading)) : -60
+                let rising = target > displayedDB[lane]
+                withAnimation(.easeOut(duration: rising ? 0.045 : 0.24)) {
+                    displayedDB[lane] = target
+                }
+            }
+        }
+        .onChange(of: fresh) { _, active in
+            if !active {
+                withAnimation(.easeOut(duration: 0.18)) { displayedDB = [-60, -60] }
             }
         }
         .help("Latest audio-buffer peaks sampled 20 times per second. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")

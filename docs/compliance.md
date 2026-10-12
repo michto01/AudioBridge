@@ -14,6 +14,7 @@ This is an engineering checklist, not legal advice. Verify current Apple platfor
 - Supply `NSMicrophoneUsageDescription` in the actual app bundle; request/check capture permission and present actionable recovery guidance.
 - Device behavior and TCC requirements must be tested on the supported macOS releases, including built-in, external and virtual Core Audio devices.
 - Do not transmit, record or persist audio in v1. No telemetry, cloud upload or network connection is required by the application itself.
+- The explicitly opt-in OSC/HTTP control feature transmits only status, meter peaks, gain/bypass commands and route Start/Stop commands on the local network; it does not transport audio. The HTTP bearer token is sent without TLS and OSC has no cryptographic authentication. Document and constrain that local-network exposure.
 - Avoid logging user audio samples; diagnostic logs contain technical device identifiers, status and counters only.
 
 ## Code signing and distribution
@@ -55,5 +56,6 @@ This is an engineering checklist, not legal advice. Verify current Apple platfor
 - [ ] ZIP extraction and first launch are tested on a clean user account.
 - [ ] Login item enable/disable behavior is tested.
 - [ ] No unexpected network traffic or stored audio.
+- [ ] If remote control is enabled, verify OSC source allowlist, HTTP token, Local Network privacy, firewall scope and trusted-LAN-only use.
 - [ ] Third-party licences included, if applicable.
 - [ ] Known limitations and hardware requirements documented in release notes.

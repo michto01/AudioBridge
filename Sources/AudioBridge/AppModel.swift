@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var auCatalogScannedAt: Date?
     @Published private(set) var auScanCount = 0
     @Published private(set) var auScanError: String?
+    let remoteControl = RemoteControlServer()
     private let auScanQueue = DispatchQueue(label: "cz.bytelab.audiobridge.au-scan", qos: .utility)
     @Published private(set) var auEditorOpen = false
     @Published private(set) var auUpdating = false
@@ -119,6 +120,9 @@ final class AppModel: ObservableObject {
         observation?.watch([])
         checkPermission()
         if RecoveryPolicy.shouldResume(autoResume: resumeAtLaunch, desired: preferences.bool(forKey: "AudioBridge.desiredRouting")) { recovery.start() }
+        remoteControl.statusProvider = { [weak self] in self?.remoteStatusPayload ?? [:] }
+        remoteControl.commandHandler = { [weak self] command in self?.performRemoteCommand(command) ?? "App model unavailable" }
+        if remoteControl.httpEnabled || remoteControl.oscEnabled { remoteControl.apply() }
         refresh()
         if auCatalogScannedAt == nil { refreshAudioUnits() }
     }
@@ -151,6 +155,38 @@ final class AppModel: ObservableObject {
     }
     var permissionCanBeRequested: Bool {
         AVAudioApplication.shared.recordPermission == .undetermined && !requestingPermission
+    }
+    private var remoteStatusPayload: [String: Any] {
+        let input = engineSnapshot?.inputLevels ?? []
+        let output = engineSnapshot?.outputLevels ?? []
+        func level(_ values: [MeterLevel], _ index: Int) -> Double { values.indices.contains(index) ? Double(values[index].amplitude) : 0 }
+        return [
+            "application": "Audio Bridge",
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "status": status,
+            "running": routingRequested && engineSnapshot?.primed == true && engineSnapshot?.inputActive == true && engineSnapshot?.outputActive == true,
+            "routingRequested": routingRequested,
+            "input": device(.input)?.name ?? "Unconfigured",
+            "output": device(.output)?.name ?? "Unconfigured",
+            "inputLeft": level(input, 0), "inputRight": level(input, 1),
+            "outputLeft": level(output, 0), "outputRight": level(output, 1),
+            "inputTrimDB": inputTrim, "outputGainDB": outputGain,
+            "chainBypassed": chainBypassed
+        ]
+    }
+    private func performRemoteCommand(_ command: RemoteCommand) -> String? {
+        switch command {
+        case .start:
+            guard canStartRouting else { return startUnavailableReason ?? "Routing cannot start" }
+            startRouting()
+        case .stop:
+            guard canStopRouting else { return nil }
+            stopRouting()
+        case .inputGain(let value): setGain(value, direction: .input)
+        case .outputGain(let value): setGain(value, direction: .output)
+        case .chainBypass(let value): setChainBypassed(value)
+        }
+        return nil
     }
     func endpoint(_ direction: AudioDirection) -> EndpointSelection {
         direction == .input ? selection.input : selection.output
