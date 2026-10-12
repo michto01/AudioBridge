@@ -3,6 +3,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 typedef struct ABAUTransport ABAUTransport;
+typedef struct ABRendererExchange ABRendererExchange;
+ABRendererExchange *ABRendererExchangeCreate(void);
+void ABRendererExchangeDestroy(ABRendererExchange *exchange);
+bool ABRendererExchangePublish(ABRendererExchange *exchange, void *renderer);
+void *ABRendererExchangeTake(ABRendererExchange *exchange);
+void ABRendererExchangeAcknowledge(ABRendererExchange *exchange, void *renderer);
+bool ABRendererExchangeAdopted(const ABRendererExchange *exchange, void *renderer);
 uint32_t ABAUTransportProtocolVersion(void);
 typedef struct { uint32_t inputFrames, outputFrames, inFlightFrames, pendingFrames; } ABAUQueueMetrics;
 // Minimal callback snapshot; omit UI/timing counters from audio hot paths.
@@ -20,6 +27,7 @@ typedef struct {
     uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
     uint64_t blockBudgetNanoseconds, renderOverBudgetBlocks;
     uint64_t workerWaits, workerLateWakeups, maxWorkerWakeLatenessNanoseconds;
+    int32_t schedulingStatus;
 } ABAUTransportMetrics;
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity);
 const char *ABAUTransportLastError(void);
@@ -39,9 +47,14 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *transport);
 // Helper worker only; wall processing time is separate from signal latency.
 uint64_t ABAUTransportBeginBlock(ABAUTransport *transport, uint32_t frames);
 void ABAUTransportEndBlock(ABAUTransport *transport, uint64_t start);
-// Helper only. Configure before readiness; polling waits never run in HAL callbacks.
+// Helper only. Configure before readiness; waits never run in HAL callbacks.
 void ABAUTransportConfigureTiming(ABAUTransport *transport, uint64_t blockBudgetNanoseconds);
-void ABAUTransportWorkerWait(ABAUTransport *transport, uint32_t microseconds);
+// Event wait is helper-only. Queue publications issue a non-waiting signal
+// only while the helper is armed; shutdown wakes it as well.
+bool ABAUTransportWaitForBlock(ABAUTransport *transport, uint32_t frames);
+// Invoke on the dedicated render thread once; returns Mach status, exposed
+// in diagnostics. No workgroup membership or deadline guarantee is implied.
+int32_t ABAUTransportConfigureRealtimeThread(ABAUTransport *transport);
 // Deterministic accounting entry points allow tests without sleeping/plugins.
 void ABAUTransportRecordWorkerWait(ABAUTransport *transport, uint64_t requestedNanoseconds, uint64_t elapsedNanoseconds);
 void ABAUTransportRecordRenderDuration(ABAUTransport *transport, uint64_t durationNanoseconds);

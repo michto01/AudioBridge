@@ -9,6 +9,9 @@
 #include <errno.h>
 #include <stdio.h>
 #include <mach/mach_time.h>
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
+#include <semaphore.h>
 
 static _Thread_local char transport_error[256];
 const char *ABAUTransportLastError(void) { return transport_error; }
@@ -16,7 +19,7 @@ static void failure(const char *operation, int code) {
     snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
 }
 
-#define AB_SHARED_VERSION 5
+#define AB_SHARED_VERSION 6
 uint32_t ABAUTransportProtocolVersion(void) { return AB_SHARED_VERSION; }
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
@@ -30,9 +33,13 @@ typedef struct {
     _Atomic uint64_t renderBlocks, renderNanoseconds, lastRenderNanoseconds, maxRenderNanoseconds;
     _Atomic uint64_t blockBudgetNanoseconds, renderOverBudgetBlocks;
     _Atomic uint64_t workerWaits, workerLateWakeups, maxWorkerWakeLatenessNanoseconds;
+    _Atomic bool workerWaiting;
+    _Atomic uint32_t workerBlockFrames;
+    _Atomic uint64_t workerSignalTime;
+    _Atomic int32_t schedulingStatus;
     SharedRing input, output;
 } Shared;
-struct ABAUTransport { Shared *shared; char name[32]; bool owner; mach_timebase_info_data_t timebase; };
+struct ABAUTransport { Shared *shared; char name[32], eventName[32]; sem_t *event; bool owner; mach_timebase_info_data_t timebase; };
 
 static bool valid_atomics(Shared *s) {
     return atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
@@ -44,11 +51,13 @@ static bool valid_atomics(Shared *s) {
         && atomic_is_lock_free(&s->blockBudgetNanoseconds) && atomic_is_lock_free(&s->renderOverBudgetBlocks)
         && atomic_is_lock_free(&s->workerWaits) && atomic_is_lock_free(&s->workerLateWakeups)
         && atomic_is_lock_free(&s->maxWorkerWakeLatenessNanoseconds)
+        && atomic_is_lock_free(&s->workerWaiting) && atomic_is_lock_free(&s->workerBlockFrames)
+        && atomic_is_lock_free(&s->workerSignalTime) && atomic_is_lock_free(&s->schedulingStatus)
         && atomic_is_lock_free(&s->input.write) && atomic_is_lock_free(&s->output.read);
 }
 static ABAUTransport *map_transport(const char *name, bool create, uint32_t capacity) {
     transport_error[0] = 0;
-    if (!name || name[0] != '/' || strlen(name) >= 32) { failure("shared-memory name", EINVAL); return NULL; }
+    if (!name || name[0] != '/' || strlen(name) >= 31) { failure("shared-memory name", EINVAL); return NULL; }
     if (create && (capacity < 2 || capacity > AB_SHARED_CAPACITY || (capacity & (capacity - 1)))) { failure("queue capacity", EINVAL); return NULL; }
     int fd = shm_open(name, create ? O_CREAT | O_EXCL | O_RDWR : O_RDWR, 0600);
     if (fd < 0) { failure("shm_open", errno); return NULL; }
@@ -72,6 +81,8 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
         atomic_init(&s->renderNanoseconds, 0); atomic_init(&s->lastRenderNanoseconds, 0); atomic_init(&s->maxRenderNanoseconds, 0);
         atomic_init(&s->blockBudgetNanoseconds, 0); atomic_init(&s->renderOverBudgetBlocks, 0);
         atomic_init(&s->workerWaits, 0); atomic_init(&s->workerLateWakeups, 0); atomic_init(&s->maxWorkerWakeLatenessNanoseconds, 0);
+        atomic_init(&s->workerWaiting, false); atomic_init(&s->workerBlockFrames, 0);
+        atomic_init(&s->workerSignalTime, 0); atomic_init(&s->schedulingStatus, -1);
         atomic_init(&s->input.write, 0); atomic_init(&s->input.read, 0);
         atomic_init(&s->output.write, 0); atomic_init(&s->output.read, 0);
     }
@@ -82,16 +93,26 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
     ABAUTransport *transport = calloc(1, sizeof(*transport));
     if (!transport) { failure("transport allocation", ENOMEM); munmap(s, sizeof(*s)); if (create) shm_unlink(name); return NULL; }
     transport->shared = s; transport->owner = create; strcpy(transport->name, name);
+    snprintf(transport->eventName, sizeof(transport->eventName), "%se", name);
+    transport->event = sem_open(transport->eventName, create ? O_CREAT | O_EXCL : 0, 0600, 0);
+    if (transport->event == SEM_FAILED) {
+        failure("worker event", errno); munmap(s, sizeof(*s)); free(transport); if (create) shm_unlink(name); return NULL;
+    }
     if (mach_timebase_info(&transport->timebase) != KERN_SUCCESS || !transport->timebase.denom) {
-        failure("clock timebase", EINVAL); munmap(s, sizeof(*s)); free(transport); if (create) shm_unlink(name); return NULL;
+        failure("clock timebase", EINVAL); sem_close(transport->event);
+        if (create) sem_unlink(transport->eventName);
+        munmap(s, sizeof(*s)); free(transport); if (create) shm_unlink(name); return NULL;
     }
     return transport;
 }
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity) { return map_transport(name, true, capacity); }
 ABAUTransport *ABAUTransportOpen(const char *name) { return map_transport(name, false, 0); }
-void ABAUTransportUnlink(ABAUTransport *t) { if (t && t->owner) { shm_unlink(t->name); t->owner = false; } }
-void ABAUTransportClose(ABAUTransport *t) { if (t) { ABAUTransportUnlink(t); munmap(t->shared, sizeof(Shared)); free(t); } }
-void ABAUTransportShutdown(ABAUTransport *t) { atomic_store_explicit(&t->shared->stopped, true, memory_order_release); }
+void ABAUTransportUnlink(ABAUTransport *t) { if (t && t->owner) { shm_unlink(t->name); sem_unlink(t->eventName); t->owner = false; } }
+void ABAUTransportClose(ABAUTransport *t) { if (t) { ABAUTransportUnlink(t); sem_close(t->event); munmap(t->shared, sizeof(Shared)); free(t); } }
+static void notify_worker(ABAUTransport *t);
+void ABAUTransportShutdown(ABAUTransport *t) {
+    atomic_store_explicit(&t->shared->stopped, true, memory_order_release); notify_worker(t);
+}
 bool ABAUTransportStopped(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->stopped, memory_order_acquire); }
 uint64_t ABAUTransportProcessedFrames(const ABAUTransport *t) { return atomic_load_explicit(&t->shared->processedFrames, memory_order_relaxed); }
 void ABAUTransportSetBypass(ABAUTransport *t, bool bypass) { atomic_store_explicit(&t->shared->bypass, bypass, memory_order_release); }
@@ -120,31 +141,96 @@ static uint32_t write_ring(SharedRing *r, uint32_t capacity, const float *sample
     uint32_t write = atomic_load_explicit(&r->write, memory_order_relaxed);
     uint32_t read = atomic_load_explicit(&r->read, memory_order_acquire);
     uint32_t space = capacity - (write - read), count = frames < space ? frames : space;
-    for (uint32_t i = 0; i < count; ++i) {
-        uint32_t slot = ((write + i) & (capacity - 1)) * 2;
-        r->samples[slot] = samples[i * 2]; r->samples[slot + 1] = samples[i * 2 + 1];
-    }
+    uint32_t slot = write & (capacity - 1), first = count < capacity - slot ? count : capacity - slot;
+    memcpy(r->samples + slot * 2, samples, (size_t)first * 2 * sizeof(float));
+    if (count > first) memcpy(r->samples, samples + first * 2, (size_t)(count - first) * 2 * sizeof(float));
     atomic_store_explicit(&r->write, write + count, memory_order_release); return count;
 }
 static uint32_t read_ring(SharedRing *r, uint32_t capacity, float *samples, uint32_t frames) {
     uint32_t read = atomic_load_explicit(&r->read, memory_order_relaxed);
     uint32_t write = atomic_load_explicit(&r->write, memory_order_acquire);
     uint32_t count = frames < write - read ? frames : write - read;
-    for (uint32_t i = 0; i < count; ++i) {
-        uint32_t slot = ((read + i) & (capacity - 1)) * 2;
-        samples[i * 2] = r->samples[slot]; samples[i * 2 + 1] = r->samples[slot + 1];
-    }
+    uint32_t slot = read & (capacity - 1), first = count < capacity - slot ? count : capacity - slot;
+    memcpy(samples, r->samples + slot * 2, (size_t)first * 2 * sizeof(float));
+    if (count > first) memcpy(samples + first * 2, r->samples, (size_t)(count - first) * 2 * sizeof(float));
     if (count < frames) memset(samples + count * 2, 0, (size_t)(frames - count) * 2 * sizeof(float));
     atomic_store_explicit(&r->read, read + count, memory_order_release); return count;
 }
-uint32_t ABAUCaptureWrite(ABAUTransport *t, const float *s, uint32_t n) { return write_ring(&t->shared->input, t->shared->capacity, s, n); }
-uint32_t ABAUOutputRead(ABAUTransport *t, float *s, uint32_t n) { return read_ring(&t->shared->output, t->shared->capacity, s, n); }
+uint32_t ABAUCaptureWrite(ABAUTransport *t, const float *s, uint32_t n) {
+    uint32_t written = write_ring(&t->shared->input, t->shared->capacity, s, n); notify_worker(t); return written;
+}
+uint32_t ABAUOutputRead(ABAUTransport *t, float *s, uint32_t n) {
+    uint32_t read = read_ring(&t->shared->output, t->shared->capacity, s, n); notify_worker(t); return read;
+}
 uint32_t ABAUWorkerRead(ABAUTransport *t, float *s, uint32_t n) { return read_ring(&t->shared->input, t->shared->capacity, s, n); }
 uint32_t ABAUWorkerWrite(ABAUTransport *t, const float *s, uint32_t n) {
     uint32_t written = write_ring(&t->shared->output, t->shared->capacity, s, n);
     atomic_fetch_add_explicit(&t->shared->processedFrames, written, memory_order_relaxed); return written;
 }
 uint32_t ABAUWorkerSpace(const ABAUTransport *t) { return t->shared->capacity - available(&t->shared->output, t->shared->capacity); }
+static bool worker_can_run(const ABAUTransport *t, uint32_t frames) {
+    return ABAUTransportStopped(t) || (frames && available(&t->shared->input, t->shared->capacity) >= frames
+        && ABAUWorkerSpace(t) >= frames);
+}
+static void notify_worker(ABAUTransport *t) {
+    Shared *s = t->shared;
+    // Pair with the worker's arm/recheck fence: without store->load ordering
+    // both threads could observe the old state and lose the only wakeup.
+    atomic_thread_fence(memory_order_seq_cst);
+    if (!atomic_load_explicit(&s->workerWaiting, memory_order_acquire)) return;
+    uint32_t frames = atomic_load_explicit(&s->workerBlockFrames, memory_order_relaxed);
+    if (!worker_can_run(t, frames)) return;
+    if (atomic_exchange_explicit(&s->workerWaiting, false, memory_order_acq_rel)) {
+        atomic_store_explicit(&s->workerSignalTime, mach_absolute_time(), memory_order_release);
+        // Non-waiting notification only. HAL never waits on this semaphore,
+        // allocates it, or acquires a userspace mutex. At most one outstanding
+        // signal is allowed by the arm/consume handshake.
+        if (sem_post(t->event) != 0) ABAUTransportFault(t, -1);
+    }
+}
+bool ABAUTransportWaitForBlock(ABAUTransport *t, uint32_t frames) {
+    if (!frames || frames > t->shared->capacity) return false;
+    while (!worker_can_run(t, frames)) {
+        atomic_store_explicit(&t->shared->workerBlockFrames, frames, memory_order_relaxed);
+        atomic_store_explicit(&t->shared->workerWaiting, true, memory_order_release);
+        atomic_thread_fence(memory_order_seq_cst);
+        // Recheck after arming: a publication between the first check and arm
+        // must not be missed. If a callback already claimed the signal, consume
+        // it even if the queue is now ready, before arming another wait.
+        if (worker_can_run(t, frames)) {
+            bool expected = true;
+            if (atomic_compare_exchange_strong_explicit(&t->shared->workerWaiting, &expected, false,
+                memory_order_acq_rel, memory_order_acquire)) return !ABAUTransportStopped(t);
+        }
+        int result;
+        do { result = sem_wait(t->event); } while (result != 0 && errno == EINTR);
+        if (result != 0) { ABAUTransportFault(t, -1); return false; }
+        uint64_t signaled = atomic_load_explicit(&t->shared->workerSignalTime, memory_order_acquire);
+        uint64_t now = mach_absolute_time();
+        uint64_t late = now >= signaled ? now - signaled : 0;
+        late = (uint64_t)((long double)late * t->timebase.numer / t->timebase.denom);
+        // Only signal-to-resume delay counts, not legitimate idle time.
+        ABAUTransportRecordWorkerWait(t, 0, late);
+    }
+    return !ABAUTransportStopped(t);
+}
+int32_t ABAUTransportConfigureRealtimeThread(ABAUTransport *t) {
+    uint64_t ns = atomic_load_explicit(&t->shared->blockBudgetNanoseconds, memory_order_relaxed);
+    uint64_t ticks = (uint64_t)((long double)ns * t->timebase.denom / t->timebase.numer);
+    kern_return_t status = KERN_INVALID_ARGUMENT;
+    if (ticks >= 2 && ticks <= UINT32_MAX) {
+        thread_time_constraint_policy_data_t policy = {
+            .period = (uint32_t)ticks, .computation = (uint32_t)(ticks / 2),
+            .constraint = (uint32_t)ticks, .preemptible = TRUE
+        };
+        thread_t thread = mach_thread_self();
+        status = thread_policy_set(thread, THREAD_TIME_CONSTRAINT_POLICY,
+            (thread_policy_t)&policy, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+        mach_port_deallocate(mach_task_self(), thread);
+    }
+    atomic_store_explicit(&t->shared->schedulingStatus, status, memory_order_release);
+    return status;
+}
 static uint32_t pending_frames(const Shared *s) {
     // Same frame domain: captures accepted minus source frames consumed/discarded.
     // AU transfer changes neither counter. Unsigned subtraction handles wrap.
@@ -181,6 +267,7 @@ ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     result.workerWaits = atomic_load_explicit(&s->workerWaits, memory_order_relaxed);
     result.workerLateWakeups = atomic_load_explicit(&s->workerLateWakeups, memory_order_relaxed);
     result.maxWorkerWakeLatenessNanoseconds = atomic_load_explicit(&s->maxWorkerWakeLatenessNanoseconds, memory_order_relaxed);
+    result.schedulingStatus = atomic_load_explicit(&s->schedulingStatus, memory_order_acquire);
     result.inputFrames = available(&s->input, s->capacity); result.outputFrames = available(&s->output, s->capacity);
     result.pendingFrames = pending_frames(s);
     uint32_t bits = atomic_load(&s->latency); memcpy(&result.latencySeconds, &bits, sizeof(bits));
@@ -219,10 +306,4 @@ void ABAUTransportRecordWorkerWait(ABAUTransport *t, uint64_t requested, uint64_
     uint64_t budget = atomic_load_explicit(&s->blockBudgetNanoseconds, memory_order_relaxed);
     if (budget && lateness > budget)
         atomic_fetch_add_explicit(&s->workerLateWakeups, 1, memory_order_relaxed);
-}
-void ABAUTransportWorkerWait(ABAUTransport *t, uint32_t microseconds) {
-    uint64_t start = mach_absolute_time();
-    usleep(microseconds);
-    uint64_t elapsed = (uint64_t)((long double)(mach_absolute_time() - start) * t->timebase.numer / t->timebase.denom);
-    ABAUTransportRecordWorkerWait(t, (uint64_t)microseconds * 1000, elapsed);
 }

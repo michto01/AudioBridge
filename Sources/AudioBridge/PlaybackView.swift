@@ -154,7 +154,7 @@ private struct DelayView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Bridge + callback buffers").foregroundStyle(.secondary)
                     Spacer()
-                    Text(bridgeMilliseconds.map { "~\(number($0)) ms" } ?? "—")
+                    Text(model.routingRequested && telemetry.snapshot?.primed != true ? "Filling…" : (bridgeMilliseconds.map { "~\(number($0)) ms" } ?? "—"))
                         .font(.title2.weight(.semibold)).monospacedDigit()
                 }
                 if model.showDebugInformation, let s = telemetry.snapshot, let estimate = model.delayEstimate {
@@ -188,11 +188,11 @@ private struct DelayView: View {
         }
     }
     private var bridgeMilliseconds: Double? {
-        delayAverageReady ? averagedBridgeMilliseconds : model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer])
+        averagedBridgeMilliseconds ?? model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer])
     }
     private var delayHelp: String {
         let observation = model.engineSnapshot.map {
-            model.routingRequested ? ($0.primed ? "Live estimate, averaged over five seconds." : "Starting; the estimate is not steady yet.") : "Last run snapshot."
+            model.routingRequested ? ($0.primed ? (delayAverageReady ? "Live estimate, averaged over five seconds." : "Delivery has started; collecting the five-second average.") : "Starting or refilling; the estimate is not steady yet.") : "Last run snapshot."
         } ?? "Start routing to obtain an estimate."
         return observation + "\n\nThe main value includes callback buffers, software queues, resampler lookahead and declared AU signal latency. Device and stream latency reports add a separate allowance; small buffers do not remove that internal delay. Missing reports remain unknown. Startup reserve is not added twice. AU processing wall time is performance telemetry and is not added to signal delay.\n\nActual end-to-end latency requires a loopback measurement. Enable interface debug information in Diagnostics for the accounting breakdown."
     }

@@ -4,6 +4,7 @@
 #include <string.h>
 #define TAPS 32
 #define PHASES 256
+#define SOURCE_FRAMES 65664
 static double clamp(double x, double lo, double hi) { return fmin(hi, fmax(lo, x)); }
 bool ABDriftShouldHold(double pending, double target, uint32_t processed, uint32_t needed, uint32_t reserve) {
     return processed < (uint64_t)needed + reserve / 2 && pending > target;
@@ -35,7 +36,8 @@ void ABDriftReanchor(ABDriftController *c, double target) {
     c->integral = clamp(c->ppm, -800, 800);
 }
 struct ABResampler {
-    float coefficients[PHASES][TAPS], window[TAPS][2];
+    float coefficients[PHASES][TAPS], window[TAPS * 2][2];
+    float source[SOURCE_FRAMES][2];
     uint32_t head, primeCount;
     double fraction;
     bool primed, starved;
@@ -76,9 +78,18 @@ uint32_t ABResamplerProcess(ABResampler *r, ABReadStereo read, void *context, fl
     if (!r || !read || !out || !frames || frames > 65536 || !isfinite(ratio) || ratio < 0.999 || ratio > 1.001) return 0;
     memset(out, 0, (size_t)frames * 2 * sizeof(float));
     r->starved = false;
+    // Fetch exactly this callback's source demand once. No per-sample IPC
+    // atomics/wakes; short reads retain the same FIR history and phase.
+    uint32_t needed = ABResamplerInputNeeded(r, frames, ratio);
+    if (needed > SOURCE_FRAMES) return 0;
+    uint32_t available = needed ? read(context, &r->source[0][0], needed) : 0;
+    if (available > needed) available = needed;
+    uint32_t consumed = 0;
     if (!r->primed) {
         while (r->primeCount < TAPS) {
-            if (read(context, r->window[r->primeCount], 1) != 1) { r->starved = true; return 0; }
+            if (consumed == available) { r->starved = true; return 0; }
+            memcpy(r->window[r->primeCount], r->source[consumed++], sizeof(float) * 2);
+            memcpy(r->window[r->primeCount + TAPS], r->window[r->primeCount], sizeof(float) * 2);
             r->primeCount++;
         }
         r->primed = true;
@@ -88,15 +99,15 @@ uint32_t ABResamplerProcess(ABResampler *r, ABReadStereo read, void *context, fl
         // Advance only when another output sample needs it. A full final
         // callback must not starve just because the *next* sample is absent.
         while (r->fraction >= 1) {
-            float next[2];
-            if (read(context, next, 1) != 1) { r->starved = true; return made; }
-            memcpy(r->window[r->head], next, sizeof(next));
+            if (consumed == available) { r->starved = true; return made; }
+            memcpy(r->window[r->head], r->source[consumed++], sizeof(float) * 2);
+            memcpy(r->window[r->head + TAPS], r->window[r->head], sizeof(float) * 2);
             r->head = (r->head + 1) % TAPS; r->fraction -= 1;
         }
         uint32_t phase = (uint32_t)(r->fraction * PHASES);
         double left = 0, right = 0;
         for (uint32_t j = 0; j < TAPS; j++) {
-            uint32_t index = (r->head + j) % TAPS;
+            uint32_t index = r->head + j;
             left += r->window[index][0] * r->coefficients[phase][j];
             right += r->window[index][1] * r->coefficients[phase][j];
         }

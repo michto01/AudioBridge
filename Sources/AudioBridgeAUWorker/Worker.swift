@@ -80,7 +80,6 @@ final class Renderer: @unchecked Sendable {
     let list: UnsafeMutableAudioBufferListPointer
     var stages: [Stage] = []
     var latencySeconds: Float = 0
-    var idleMicroseconds: UInt32 = 1000
     var blockBudgetNanoseconds: UInt64 = 0
 
     init(transport: OpaquePointer, frames: UInt32) {
@@ -97,7 +96,6 @@ final class Renderer: @unchecked Sendable {
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: request.sampleRate, channels: 2, interleaved: false) else {
             throw AUError("Invalid helper processing format.")
         }
-        idleMicroseconds = UInt32(min(1000, max(50, Double(frames) / request.sampleRate * 250_000)))
         let budget = Double(frames) / request.sampleRate * 1_000_000_000
         guard budget.isFinite, budget >= 1, budget < Double(UInt64.max) else {
             throw AUError("Invalid helper block duration.")
@@ -148,8 +146,7 @@ final class Renderer: @unchecked Sendable {
         do {
             ABAUTransportHeartbeat(transport)
             guard ABAUTransportQueues(transport).inputFrames >= frames, ABAUWorkerSpace(transport) >= frames else {
-                ABAUTransportWorkerWait(transport, idleMicroseconds)
-                return true // Helper only; HAL callbacks never wait.
+                return true // Driver waits for a signaled full block; HAL never waits.
             }
             let renderStart = ABAUTransportBeginBlock(transport, frames)
             defer { ABAUTransportEndBlock(transport, renderStart) }
@@ -271,7 +268,7 @@ enum Worker {
                 // unbounded third-party stderr during unattended rendering.
                 let nullError = open("/dev/null", O_WRONLY)
                 if nullError >= 0 { _ = dup2(nullError, STDERR_FILENO); close(nullError) }
-                LiveHost(directory: URL(fileURLWithPath: args[3]).deletingLastPathComponent(), request: request, renderer: renderer).start()
+                try LiveHost(directory: URL(fileURLWithPath: args[3]).deletingLastPathComponent(), request: request, renderer: renderer).start()
             } catch {
                 ABAUTransportFault(transport, -1)
                 FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))

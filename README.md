@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.5.8/build 31 prevents replacement of a running bundle, diagnoses helper startup incompatibility, supports direct routing with effects off, and reduces UI telemetry to 5 Hz with fixed-layout meter drawing. Tests and live audio/UI acceptance remain unrun.**
+Status: **0.5.9/build 32 replaces AU render polling with signaled waits, requests a Mach real-time thread policy, removes the render handoff mutex, batches resampler queue reads, and moves meter animation into native layers. FIFO capacity/reserve and startup reporting are distinct. See [real-time scheduling results](docs/realtime-scheduling-results.md). New audio/CPU/stability acceptance remains unrun.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 

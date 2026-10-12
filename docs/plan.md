@@ -108,6 +108,14 @@ User-authorized effect suspension: 0.5.7/build 30 adds a saved Enable effect pro
 
 User-authorized startup/rendering repair: 0.5.8/build 31 guards running-bundle replacement, identifies incompatible helper startup as action-required, exposes effect controls during recovery, supports direct routing when starting with effects off, and publishes UI telemetry at 5 Hz while retaining the 20 Hz watchdog. Meter animation draws inside fixed bounds. See [helper startup and UI load results](helper-startup-ui-load-results.md). Effect-mode route restarts respect manual Stop. Worker scheduling refinement and Phase 5 operational acceptance remain pending.
 
+User-authorized real-time performance follow-up: 0.5.9/build 32 adds signaled
+AU work readiness, a reported Mach real-time scheduling request, lock-free
+block-boundary renderer adoption with main-thread retirement, batched source
+reads and mirrored FIR history. Meter animation moves to native layers; FIFO
+capacity/reserve and startup filling are explicit. See [real-time scheduling
+results](realtime-scheduling-results.md). Audio workgroups, runtime scheduling,
+CPU comparisons and Phase 5 operational acceptance remain pending.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

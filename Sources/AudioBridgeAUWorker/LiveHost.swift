@@ -3,29 +3,45 @@ import AudioBridgeAU
 import AudioBridgeRealtime
 import Foundation
 
-/// Helper-only synchronization. HAL callbacks access only the C shared queues.
+/// Block-boundary handoff; main retains each retiring renderer until the
+/// render thread acknowledges adoption. No render-thread mutex or AU teardown.
 final class RenderDriver: @unchecked Sendable {
-    private let lock = NSLock()
+    private let exchange: OpaquePointer
+    private let transport: OpaquePointer
+    private let initialLatency: Float
     private var current: Renderer
-    init(_ renderer: Renderer) { current = renderer }
-    func replace(_ renderer: Renderer) {
-        lock.lock(); let retired = current; current = renderer; lock.unlock()
-        withExtendedLifetime(retired) {}
-        ABAUTransportReady(renderer.transport, renderer.latencySeconds)
+    init?(_ renderer: Renderer) {
+        guard let exchange = ABRendererExchangeCreate() else { return nil }
+        self.exchange = exchange; transport = renderer.transport
+        initialLatency = renderer.latencySeconds; current = renderer
+    }
+    deinit { ABRendererExchangeDestroy(exchange) }
+    func replace(_ renderer: Renderer) -> Bool {
+        ABRendererExchangePublish(exchange, Unmanaged.passUnretained(renderer).toOpaque())
+    }
+    func adopted(_ renderer: Renderer) -> Bool {
+        ABRendererExchangeAdopted(exchange, Unmanaged.passUnretained(renderer).toOpaque())
     }
     func setBypass(_ value: Bool) {
-        lock.lock(); let transport = current.transport; lock.unlock()
         ABAUTransportSetBypass(transport, value)
     }
     func run() {
+        _ = ABAUTransportConfigureRealtimeThread(transport)
+        // Parent starts HAL only after the actual render thread is scheduled
+        // and has finished its policy setup, rather than after Thread.start().
+        ABAUTransportReady(transport, initialLatency)
         while true {
-            lock.lock(); let renderer = current; lock.unlock()
-            if ABAUTransportStopped(renderer.transport) { return }
+            guard ABAUTransportWaitForBlock(transport, current.frames) else { return }
+            if let pointer = ABRendererExchangeTake(exchange) {
+                current = Unmanaged<Renderer>.fromOpaque(pointer).takeUnretainedValue()
+                ABAUTransportSetLatency(transport, current.latencySeconds)
+                ABRendererExchangeAcknowledge(exchange, pointer)
+            }
             // Bound temporary Objective-C objects from plugin rendering on this
             // long-lived helper thread. This is outside every HAL callback.
             let succeeded = autoreleasepool {
-                renderer.processBlock(bypass: ABAUTransportBypassed(renderer.transport),
-                    effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(renderer.transport))
+                current.processBlock(bypass: ABAUTransportBypassed(transport),
+                    effectsProcessingEnabled: ABAUTransportEffectsProcessingEnabled(transport))
             }
             if !succeeded { return }
         }
@@ -40,19 +56,22 @@ final class LiveHost {
     private let transport: OpaquePointer
     private let driver: RenderDriver
     private var renderer: Renderer
+    private var pendingRenderer: Renderer?
+    private var pendingReplacementID: UUID?
     private var lastCommand: UUID?
     private var busy = false
     private var timer: Timer?
-    init(directory: URL, request: AUWorkerRequest, renderer: Renderer) {
+    init(directory: URL, request: AUWorkerRequest, renderer: Renderer) throws {
         self.directory = directory; self.request = request; self.renderer = renderer
-        transport = renderer.transport; driver = RenderDriver(renderer)
+        transport = renderer.transport
+        guard let driver = RenderDriver(renderer) else { throw AUError("Unable to allocate lock-free render handoff.") }
+        self.driver = driver
     }
     func start() {
         Self.retained = self
         driver.setBypass(request.bypass == true)
         ABAUTransportSetEffectsProcessingEnabled(transport, request.effectsProcessingEnabled ?? true)
         ABAUTransportConfigureTiming(transport, renderer.blockBudgetNanoseconds)
-        ABAUTransportReady(transport, renderer.latencySeconds)
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
@@ -60,7 +79,8 @@ final class LiveHost {
         RunLoop.main.add(timer, forMode: .common)
         let driver = driver
         // Dedicated ownership avoids occupying a shared GCD worker indefinitely.
-        // QoS remains a scheduling preference, not a deadline guarantee.
+        // QoS is the fallback if the render thread's Mach policy request fails.
+        // The scheduling result is telemetry, not a deadline guarantee.
         let renderThread = Thread { driver.run(); exit(0) }
         renderThread.name = "AudioBridge AU render"
         renderThread.qualityOfService = .userInteractive
@@ -72,6 +92,12 @@ final class LiveHost {
         busy = false
     }
     private func poll() {
+        if let next = pendingRenderer, let id = pendingReplacementID, driver.adopted(next) {
+            // Render has finished with the old chain. Its last strong owner is
+            // released here on AppKit's thread, including AU resource teardown.
+            renderer = next; pendingRenderer = nil; pendingReplacementID = nil
+            reply(AULiveResponse(id: id))
+        }
         if ABAUTransportEffectsProcessingEnabled(transport) { renderer.refreshLatency() }
         Editor.setChainBypassed(ABAUTransportBypassed(transport))
         Editor.setEffectsProcessingEnabled(ABAUTransportEffectsProcessingEnabled(transport))
@@ -107,8 +133,11 @@ final class LiveHost {
                     try chain.validate()
                     let next = Renderer(transport: transport, frames: request.blockFrames)
                     try await next.prepare(request: AUWorkerRequest(chain: chain, sampleRate: request.sampleRate, blockFrames: request.blockFrames))
-                    driver.replace(next); renderer = next
-                    reply(AULiveResponse(id: command.id))
+                    pendingRenderer = next; pendingReplacementID = command.id
+                    guard driver.replace(next) else {
+                        pendingRenderer = nil; pendingReplacementID = nil
+                        throw AUError("A chain replacement is already awaiting adoption.")
+                    }
                 } catch {
                     reply(AULiveResponse(id: command.id, error: error.localizedDescription))
                     ABAUTransportFault(transport, -1)

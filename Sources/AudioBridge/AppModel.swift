@@ -182,7 +182,7 @@ final class AppModel: ObservableObject {
     var outputIssue: String? { selection.issue(in: catalog.devices, direction: .output) }
     var status: String {
         if routingFault != nil || error != nil { return "Action required" }
-        if routingTransitioning { return routingRequested ? "Starting" : "Stopping" }
+        if routingTransitioning { return routingRequested ? "Starting — preparing audio" : "Stopping" }
         if recovery.desired, !routingRequested, let recoveryMessage { return recoveryMessage }
         if routingRequested {
             if let snapshot = engineSnapshot, !snapshot.primed, snapshot.rebufferEvents > 0 {
@@ -190,7 +190,7 @@ final class AppModel: ObservableObject {
             }
             guard let snapshot = engineSnapshot, snapshot.primed,
                   snapshot.inputCallbacks > 0, snapshot.outputCallbacks > 0,
-                  snapshot.outputFrames > 0 else { return "Starting — waiting for callbacks" }
+                  snapshot.outputFrames > 0 else { return "Starting — filling audio queues" }
             if snapshot.recentGlitches {
                 return "Running — delivery warning"
             }
@@ -1020,7 +1020,7 @@ final class AppModel: ObservableObject {
                 "Captured frames: \(s.inputFrames)", "Rendered frames: \(s.outputFrames)",
                 "Underrun frames: \(s.underrunFrames)", "Overrun frames: \(s.overrunFrames)", "Format faults: \(s.formatFaults)",
                 "Counters remain cumulative for this run."])
-            section("QUEUES", ["FIFO queued / capacity: \(s.bufferedFrames) / \(s.capacity) frames",
+            section("QUEUES", ["Ready audio queued: \(s.bufferedFrames) frames", "Allocated capacity per queue: \(s.capacity) frames",
                 "Reserve target: \(s.targetFrames) frames", "Pending source: \(s.pendingSourceFrames) frames",
                 "Capture queue: \(s.captureQueueFrames) frames", "AU in flight: \(s.auInFlightFrames) frames",
                 "Processed queue: \(s.processedQueueFrames) frames", "Refill threshold: \(s.refillThresholdFrames) frames",
@@ -1035,8 +1035,9 @@ final class AppModel: ObservableObject {
                 "Block budget: \(decimal(Double(s.auBlockBudgetNanoseconds) / 1e6)) ms",
                 "Wall time last: \(decimal(Double(s.auLastRenderNanoseconds) / 1e6)) ms", "Wall time mean: \(mean)",
                 "Wall time maximum: \(decimal(Double(s.auMaxRenderNanoseconds) / 1e6)) ms",
-                "Over-budget blocks: \(s.auRenderOverBudgetBlocks)", "Worker polling waits: \(s.auWorkerWaits)",
-                "Late worker wakeups: \(s.auWorkerLateWakeups)", "Maximum wake lateness: \(decimal(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms",
+                "Render thread Mach scheduling status: \(s.auSchedulingStatus.map(String.init) ?? "No helper") (0 = accepted)",
+                "Over-budget blocks: \(s.auRenderOverBudgetBlocks)", "Worker signaled waits: \(s.auWorkerWaits)",
+                "Late worker wakeups: \(s.auWorkerLateWakeups)", "Maximum signal-to-wake delay: \(decimal(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms",
                 "Wall time includes scheduling and is separate from signal delay."])
             section("SIGNAL", ["Input full-scale samples L / R: \(s.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))",
                 "Output full-scale samples L / R: \(s.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))",

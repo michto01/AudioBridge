@@ -49,6 +49,8 @@ public struct Phase2Plan: Sendable {
         // Avoid waiting for multiple small device callbacks merely because the
         // bridge reserve is larger. Preserve the existing 16–256-frame bounds.
         auBlockFrames = try AUBlockSizing.frames(startupFill: min(prefill, largestBuffer))
+        // Storage headroom, not another fill target. Only occupied frames add
+        // queue delay; AU input/output each receive this bounded capacity.
         var size: UInt32 = 1024
         while size < max(prefill * 2, largestBuffer * 4) { size *= 2 }
         capacity = size

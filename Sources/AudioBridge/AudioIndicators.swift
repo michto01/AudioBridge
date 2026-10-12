@@ -70,43 +70,71 @@ struct SignalMeters: View {
         .onChange(of: levels?.map(\.decibels)) { _, new in
             for lane in 0..<2 {
                 let reading = new.flatMap { $0.indices.contains(lane) ? $0[lane] : nil } ?? -.infinity
-                let target = reading.isFinite ? min(0, max(-60, reading)) : -60
-                let rising = target > displayedDB[lane]
-                withAnimation(.easeOut(duration: rising ? 0.12 : 0.3)) {
-                    displayedDB[lane] = target
-                }
+                displayedDB[lane] = reading.isFinite ? min(0, max(-60, reading.rounded())) : -60
             }
         }
         .onChange(of: fresh) { _, active in
             if !active {
-                withAnimation(.easeOut(duration: 0.18)) { displayedDB = [-60, -60] }
+                displayedDB = [-60, -60]
             }
         }
         .help("Audio-buffer peaks sampled approximately five times per second for display. Health transitions appear immediately. CLIP holds for one second after full-scale samples: signal level, not a routing glitch. Cumulative counts remain in Diagnostics. Inactive means no fresh callback or routing stopped. Local output levels do not confirm sound at the speakers.")
     }
 }
 
-/// Animate drawing inside fixed bounds, rather than laying out nested geometry
-/// readers and changing mask widths for every interpolated meter frame.
-private struct MeterBar: View, Animatable {
-    var fraction: Double
-    var animatableData: Double {
-        get { fraction }
-        set { fraction = newValue }
+/// Core Animation interpolates a layer mask without requesting SwiftUI body,
+/// Canvas draws or layout at display refresh rate. Values still arrive at 5 Hz.
+private struct MeterBar: NSViewRepresentable {
+    let fraction: Double
+    func makeNSView(context: Context) -> NativeMeterBar { NativeMeterBar() }
+    func updateNSView(_ view: NativeMeterBar, context: Context) { view.setFraction(fraction) }
+}
+
+private final class NativeMeterBar: NSView {
+    private let gradient = CAGradientLayer()
+    private let fillMask = CALayer()
+    private var fraction: CGFloat = 0
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        gradient.colors = [NSColor.systemGreen.cgColor, NSColor.systemGreen.cgColor,
+            NSColor.systemYellow.cgColor, NSColor.systemYellow.cgColor,
+            NSColor.systemRed.cgColor, NSColor.systemRed.cgColor]
+        gradient.locations = [0, 0.90, 0.90, 0.98, 0.98, 1]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5); gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        fillMask.backgroundColor = NSColor.white.cgColor
+        fillMask.anchorPoint = CGPoint(x: 0, y: 0.5)
+        gradient.mask = fillMask; layer?.addSublayer(gradient)
     }
-    var body: some View {
-        Canvas { context, size in
-            let radius = size.height / 2
-            context.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius),
-                         with: .color(.primary.opacity(0.10)))
-            let width = size.width * min(1, max(0, fraction))
-            guard width > 0 else { return }
-            let path = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: size.height), cornerRadius: radius)
-            let colors = Gradient(stops: [.init(color: .green, location: 0), .init(color: .green, location: 0.90),
-                .init(color: .yellow, location: 0.90), .init(color: .yellow, location: 0.98),
-                .init(color: .red, location: 0.98), .init(color: .red, location: 1)])
-            context.fill(path, with: .linearGradient(colors, startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)))
-        }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    convenience init() { self.init(frame: .zero) }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+        layer?.cornerRadius = bounds.height / 2
+        gradient.frame = bounds
+        fillMask.cornerRadius = bounds.height / 2
+        fillMask.position = CGPoint(x: 0, y: bounds.height / 2)
+        fillMask.bounds = CGRect(x: 0, y: 0, width: bounds.width * fraction, height: bounds.height)
+        CATransaction.commit()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance(); needsLayout = true
+    }
+    func setFraction(_ value: Double) {
+        let next = CGFloat(min(1, max(0, value)))
+        guard next != fraction else { return }
+        let oldWidth = fillMask.presentation()?.bounds.width ?? fillMask.bounds.width
+        let duration = next > fraction ? 0.12 : 0.3
+        fraction = next
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        fillMask.bounds.size.width = bounds.width * next
+        CATransaction.commit()
+        let animation = CABasicAnimation(keyPath: "bounds.size.width")
+        animation.fromValue = oldWidth; animation.toValue = bounds.width * next
+        animation.duration = duration; animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fillMask.add(animation, forKey: "meter")
     }
 }
 
@@ -168,7 +196,7 @@ struct BufferSettings: View {
                 }
                 if model.showDebugInformation, model.routingRequested, let metrics = telemetry.snapshot {
                     Divider()
-                    ReadoutRow("FIFO", "\(metrics.bufferedFrames) / \(metrics.capacity) frames").font(.caption)
+                    ReadoutRow("Ready audio / allocated capacity", "\(metrics.bufferedFrames) / \(metrics.capacity) frames").font(.caption)
                     ReadoutRow("Correction command", "\(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm").font(.caption)
                     ReadoutRow("Underrun / overrun frames", "\(metrics.underrunFrames) / \(metrics.overrunFrames)").font(.caption)
                 }

@@ -56,6 +56,7 @@ public struct EngineSnapshot: Sendable {
     public let auWorkerWaits: UInt64
     public let auWorkerLateWakeups: UInt64
     public let auMaxWorkerWakeLatenessNanoseconds: UInt64
+    public let auSchedulingStatus: Int32?
     public let delayInputDevice: DeviceFacts
     public let delayOutputDevice: DeviceFacts
     public let delaySelection: RouteSelection
@@ -362,6 +363,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auRenderOverBudgetBlocks: auMetrics?.renderOverBudgetBlocks ?? 0,
             auWorkerWaits: auMetrics?.workerWaits ?? 0, auWorkerLateWakeups: auMetrics?.workerLateWakeups ?? 0,
             auMaxWorkerWakeLatenessNanoseconds: auMetrics?.maxWorkerWakeLatenessNanoseconds ?? 0,
+            auSchedulingStatus: auMetrics?.schedulingStatus,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
             effectsProcessingEnabled: auMetrics?.effectsProcessingEnabled ?? false,

@@ -71,6 +71,35 @@ Two independent clock domains require an elastic buffer and resampling or equiva
 
 ## Latency
 
+Build 32's helper sleeps on a precreated named semaphore until a full capture
+block and output space are available, with arm/recheck fences and a coalesced
+publication signal. Capture/output callbacks only issue a non-waiting `sem_post`
+when an armed worker can proceed; semaphore creation, waiting and destruction
+are outside callbacks. A kernel notification has overhead; this is not a claim
+that arbitrary system calls are cost-free or bounded by an audio deadline.
+Shutdown wakes an armed helper. Wake telemetry measures signal-to-resume delay,
+excluding normal time waiting for capture/space. The shared protocol is version
+6; app and helper must come from the same bundle.
+
+The dedicated helper render thread requests `THREAD_TIME_CONSTRAINT_POLICY`
+using its block duration as period/constraint and half that duration as nominal
+computation. Diagnostics reports the setup Mach result; failed requests retain
+QoS scheduling. This is a soft scheduling request, not continuous policy
+verification, audio workgroup membership or a deadline guarantee. Readiness is
+published by the render thread after policy setup, before parent HAL startup.
+
+Renderer swaps use a lock-free borrowed-pointer mailbox. The helper main thread
+retains both old and prepared replacement owners until adoption is acknowledged
+between completed render blocks. It then releases the retired chain on the main
+thread, keeping AU render-resource teardown off the render thread. One live
+command remains outstanding until adoption; no unbounded retired-chain list.
+
+The resampler fetches its exact callback demand into preallocated scratch once,
+instead of reading/publishing the source queue for each sample. Mirrored FIR
+history removes circular indexing from the inner convolution loop. Filter,
+phase/demand calculation, short-read history and drift tuning are preserved;
+numerical, wrap, starvation and lifecycle acceptance remain pending.
+
 Report measured or estimated components separately: input device, input buffer, FIFO target, resampler, output buffer and output device. Profiles adjust safety margin rather than promising fixed end-to-end milliseconds. Default Balanced; measured round-trip/one-way signal latency requires physical loopback measurement.
 
 ## Concurrency
