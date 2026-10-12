@@ -1,6 +1,6 @@
 /// Cumulative counters remain intact. Only the presentation recovers after
-/// twenty continuously healthy seconds on a monotonic clock; silence/clipping
-/// do not participate in health. Startup alone is not a glitch.
+/// twenty continuously healthy seconds on a monotonic clock. Queue recentering
+/// and rebuffer bookkeeping alone are not evidence of lost frames.
 public struct DeliveryCounters: Equatable, Sendable {
     public let underruns, overruns, formatFaults, rebuffers, recentered: UInt64
     public init(underruns: UInt64 = 0, overruns: UInt64 = 0, formatFaults: UInt64 = 0,
@@ -19,7 +19,10 @@ public struct RecentGlitches: Sendable {
     public init() {}
     public mutating func update(now: Double, healthy: Bool, counters: DeliveryCounters) {
         guard now.isFinite else { return }
-        if counters != previous {
+        let deliveryLossChanged = counters.underruns != previous.underruns
+            || counters.overruns != previous.overruns
+            || counters.formatFaults != previous.formatFaults
+        if deliveryLossChanged {
             active = true; healthySince = nil; cleanSeconds = 0
         }
         previous = counters

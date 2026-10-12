@@ -21,6 +21,8 @@ final class RemoteControlServer: ObservableObject {
     @Published var allowedOSCAddresses = ""
     @Published private(set) var token = ""
     @Published private(set) var status = "Remote services are off"
+    @Published private(set) var httpStatus = "Stopped"
+    @Published private(set) var oscStatus = "Stopped"
 
     var statusProvider: (() -> [String: Any])?
     var commandHandler: ((RemoteCommand) -> String?)?
@@ -45,6 +47,25 @@ final class RemoteControlServer: ObservableObject {
     }
 
     func persistAndApply() {
+        persistSettings()
+        apply()
+    }
+    func setHTTPRunning(_ running: Bool) {
+        httpEnabled = running; persistSettings()
+        if running { startHTTPListener() }
+        else { httpListener?.cancel(); httpListener = nil; httpStatus = "Stopped"; updateSummary() }
+    }
+    func setOSCRunning(_ running: Bool) {
+        oscEnabled = running; persistSettings()
+        if running {
+            startOSCListener(); configureFeedback(); startReporter()
+        } else {
+            oscListener?.cancel(); oscListener = nil; oscStatus = "Stopped"
+            reportTimer?.cancel(); reportTimer = nil; feedback?.cancel(); feedback = nil
+            updateSummary()
+        }
+    }
+    private func persistSettings() {
         let defaults = UserDefaults.standard
         defaults.set(httpEnabled, forKey: "AudioBridge.remote.httpEnabled")
         defaults.set(oscEnabled, forKey: "AudioBridge.remote.oscEnabled")
@@ -54,7 +75,6 @@ final class RemoteControlServer: ObservableObject {
         defaults.set(feedbackPort, forKey: "AudioBridge.remote.feedbackPort")
         defaults.set(allowedOSCAddresses, forKey: "AudioBridge.remote.oscAllowlist")
         if httpEnabled && token.isEmpty { regenerateToken() }
-        apply()
     }
 
     func regenerateToken() {
@@ -78,41 +98,13 @@ final class RemoteControlServer: ObservableObject {
         if httpEnabled && token.isEmpty { regenerateToken() }
         if httpEnabled && token.isEmpty { return }
 
-        do {
-            if httpEnabled {
-                let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: UInt16(httpPort))!)
-                listener.newConnectionLimit = 16
-                listener.stateUpdateHandler = { [weak self] state in
-                    Task { @MainActor in self?.updateStatus("HTTP: \(Self.describe(state))") }
-                }
-                listener.newConnectionHandler = { [weak self] connection in
-                    Task { @MainActor in self?.acceptHTTP(connection) }
-                }
-                listener.start(queue: queue)
-                httpListener = listener
-            }
-            if oscEnabled {
-                let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: UInt16(oscPort))!)
-                listener.stateUpdateHandler = { [weak self] state in
-                    Task { @MainActor in self?.updateStatus("OSC: \(Self.describe(state))") }
-                }
-                listener.newConnectionHandler = { [weak self] connection in
-                    Task { @MainActor in
-                        guard let self else { connection.cancel(); return }
-                        connection.start(queue: self.queue)
-                        self.receiveOSC(connection)
-                    }
-                }
-                listener.start(queue: queue)
-                oscListener = listener
-            }
+        if httpEnabled { startHTTPListener() }
+        if oscEnabled { startOSCListener() }
+        if httpEnabled || oscEnabled {
             configureFeedback()
             startReporter()
-            status = "Starting enabled services…"
-        } catch {
-            stopListeners()
-            status = "Remote API failed: \(error.localizedDescription)"
         }
+        updateSummary()
     }
 
     func copyToken() { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(token, forType: .string) }
@@ -122,8 +114,46 @@ final class RemoteControlServer: ObservableObject {
         feedback?.cancel(); feedback = nil
         httpListener?.cancel(); httpListener = nil
         oscListener?.cancel(); oscListener = nil
+        httpStatus = "Stopped"; oscStatus = "Stopped"
     }
     private func updateStatus(_ value: String) { status = value }
+    private func updateSummary() {
+        status = "HTTP: \(httpEnabled ? httpStatus : "off") · OSC: \(oscEnabled ? oscStatus : "off")"
+    }
+    private func startHTTPListener() {
+        guard (1024...65535).contains(httpPort) else { httpStatus = "Invalid port"; updateSummary(); return }
+        if token.isEmpty { regenerateToken() }
+        guard !token.isEmpty else { httpStatus = "Token unavailable"; updateSummary(); return }
+        httpListener?.cancel()
+        do {
+            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: UInt16(httpPort))!)
+            listener.newConnectionLimit = 16
+            listener.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in self?.httpStatus = Self.describe(state); self?.updateSummary() }
+            }
+            listener.newConnectionHandler = { [weak self] connection in Task { @MainActor in self?.acceptHTTP(connection) } }
+            listener.start(queue: queue); httpListener = listener; httpStatus = "Starting"
+        } catch { httpStatus = "Failed — \(error.localizedDescription)" }
+        updateSummary()
+    }
+    private func startOSCListener() {
+        guard (1024...65535).contains(oscPort) else { oscStatus = "Invalid port"; updateSummary(); return }
+        oscListener?.cancel()
+        do {
+            let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: UInt16(oscPort))!)
+            listener.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in self?.oscStatus = Self.describe(state); self?.updateSummary() }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                Task { @MainActor in
+                    guard let self else { connection.cancel(); return }
+                    connection.start(queue: self.queue); self.receiveOSC(connection)
+                }
+            }
+            listener.start(queue: queue); oscListener = listener; oscStatus = "Starting"
+        } catch { oscStatus = "Failed — \(error.localizedDescription)" }
+        updateSummary()
+    }
 
     private func configureFeedback() {
         guard oscEnabled, !feedbackHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -350,6 +380,16 @@ struct RemoteSettingsView: View {
                         }
                         Text("GET /api/v1/status · POST /api/v1/control. Requests require Authorization: Bearer <token>. HTTP is unencrypted; use only on a trusted LAN.")
                             .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Label("HTTP: \(remote.httpStatus)", systemImage: remote.httpStatus == "listening" ? "checkmark.circle.fill" : "circle")
+                            Spacer()
+                            Button("Start HTTP") { remote.setHTTPRunning(true) }
+                            Button("Stop HTTP") { remote.setHTTPRunning(false) }
+                        }
+                        Text("Status: GET http://<Mac-IP>:\(remote.httpPort)/api/v1/status · control: POST http://<Mac-IP>:\(remote.httpPort)/api/v1/control. Commands: start, stop, inputGain, outputGain, chainBypass.")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("Status returns selected endpoint names, routing state, peak levels, linked gains and chain-bypass state. POST JSON examples: {\"command\":\"start\"}, {\"command\":\"inputGain\",\"decibels\":-6}, {\"command\":\"chainBypass\",\"bypassed\":true}.")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }.padding(4)
                 }
                 GroupBox("OSC over UDP") {
@@ -363,10 +403,18 @@ struct RemoteSettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         Text("Commands: /audiobridge/start, /stop, /input/gain (float dB), /output/gain (float dB), /effects/bypass (int 0 or 1). Reports: /audiobridge/status (string), /running (int), /input/left, /input/right, /output/left, /output/right (float linear peak).")
                             .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Label("OSC: \(remote.oscStatus)", systemImage: remote.oscStatus == "listening" ? "checkmark.circle.fill" : "circle")
+                            Spacer()
+                            Button("Start OSC") { remote.setOSCRunning(true) }
+                            Button("Stop OSC") { remote.setOSCRunning(false) }
+                        }
+                        Text("OSC commands are accepted only from exact source IPs in the allowlist. Companion status reports use the configured destination and UDP port. OSC has no cryptographic authentication.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }.padding(4)
                 }
                 Label(remote.status, systemImage: "network").font(.callout)
-                Button("Apply remote settings") { remote.persistAndApply() }
+                Button("Apply endpoint and security settings") { remote.persistAndApply() }
                 Text("Listeners are disabled by default and saved when applied. Enabling OSC control exposes unauthenticated UDP commands to allowlisted addresses; HTTP uses a Keychain token but is not encrypted. The macOS firewall and Local Network privacy settings may affect access.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()

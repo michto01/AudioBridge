@@ -1,6 +1,23 @@
 import AudioBridgeCore
 import AudioBridgeEngine
 import SwiftUI
+import Combine
+
+struct InfoButton: View {
+    let title: String
+    let message: String
+    @State private var showing = false
+    var body: some View {
+        Button { showing.toggle() } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
+            .buttonStyle(.plain).accessibilityLabel(title)
+            .popover(isPresented: $showing, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(title).font(.headline)
+                    Text(message).fixedSize(horizontal: false, vertical: true)
+                }.padding(14).frame(width: 320, alignment: .leading)
+            }
+    }
+}
 
 struct SignalMeters: View {
     @ObservedObject var model: AppModel
@@ -34,8 +51,8 @@ struct SignalMeters: View {
                             }
                         }
                     }.frame(height: 8)
-                    Text(fresh ? (db.isFinite ? String(format: "%.1f dBFS", db) : "−∞ dBFS") : "Inactive")
-                        .font(.caption.monospacedDigit()).frame(width: 85, alignment: .trailing)
+                    Text(fresh ? (db.isFinite ? String(format: "%.0f dB", db) : "−∞ dB") : "Inactive")
+                        .font(.caption.monospacedDigit()).frame(width: 70, alignment: .trailing)
                     Text(fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date()) ? "CLIP" : "")
                         .font(.caption.bold()).foregroundStyle(.red).frame(width: 32)
                 }
@@ -71,7 +88,7 @@ struct BufferSettings: View {
     @State private var expert = false
     @State private var custom = false
     var body: some View {
-        GroupBox("Bridge buffer") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     let common = BufferFrameChoices.common.filter { $0 >= Int(model.bufferMinimum) && $0 <= Int(model.bufferMaximum) }
@@ -132,6 +149,11 @@ struct BufferSettings: View {
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }.padding(4)
+        } label: {
+            HStack {
+                Text("Bridge FIFO reserve")
+                InfoButton(title: "Bridge FIFO reserve", message: "This is Audio Bridge's software queue, separate from each device's hardware buffer. The default target is twice the larger selected device buffer, with a 64-frame minimum (64-frame devices target 128 frames). It is saved immediately and takes effect on the next Start. Smaller reserves reduce queue delay but leave less time for Audio Unit and scheduler delays.")
+            }
         }
     }
 }
@@ -146,12 +168,12 @@ struct GainControl: View {
     var body: some View {
         HStack {
             Text(direction == .input ? "Input trim" : "Output gain").font(.caption).frame(width: 80, alignment: .leading)
-            Slider(value: binding, in: GainSettings.range, step: 0.5)
+            Slider(value: binding, in: GainSettings.range)
                 .accessibilityLabel(direction == .input ? "Input trim in decibels" : "Output gain in decibels")
             GainEntry(value: binding, range: GainSettings.range)
                 .frame(width: 65)
                 .accessibilityLabel("Exact gain in decibels")
-            Text("dB").font(.caption)
+            Text("dB").font(.caption).foregroundStyle(.secondary)
             Button { model.setGain(0, direction: direction) } label: { Image(systemName: "arrow.uturn.backward") }
                 .help("Reset to 0 dB")
         }
@@ -200,7 +222,7 @@ struct GainEntry: View {
             .onSubmit { commit(); focused = false }
             .help("Enter a value, then press Return or leave the field to apply.")
     }
-    private func refresh() { draft = value.formatted(.number.grouping(.never).precision(.fractionLength(2))) }
+    private func refresh() { draft = value.formatted(.number.grouping(.never).precision(.fractionLength(0))) }
     private func commit() {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal

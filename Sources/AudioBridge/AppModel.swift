@@ -12,6 +12,9 @@ import Darwin
 final class AppModel: ObservableObject {
     // Inspection is opt-in for each launch; never clutter the default interface.
     @Published var showDebugInformation = false
+    @Published var showRemoteTab = true
+    @Published var showDiagnosticsTab = true
+    @Published private(set) var routingStartedAt: Date?
     @Published private(set) var recovery = RecoveryPolicy()
     @Published private(set) var recoveryMessage: String?
     @Published private(set) var lastRecoveryFault: String?
@@ -26,6 +29,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var permission = "Not checked"
     @Published private(set) var requestingPermission = false
+    @Published private(set) var settingsRestorePending = false
     @Published private(set) var refreshing = false
     @Published private(set) var deviceIcons: [String: NSImage] = [:]
     @Published private(set) var routingRequested = false
@@ -57,6 +61,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var writableBuffers: Set<String> = []
     @Published private(set) var changingDeviceBuffer = false
     @Published private(set) var deviceBufferMessage: String?
+    @Published private(set) var deviceBufferDrafts: [String: UInt32] = [:]
     private var auEditor: Process?
     private var auEditorDirectory: URL?
     private let engine = AudioBridgeEngine()
@@ -98,6 +103,8 @@ final class AppModel: ObservableObject {
 
     init() {
         let preferences = UserDefaults.standard
+        showRemoteTab = preferences.object(forKey: "AudioBridge.showRemoteTab") as? Bool ?? true
+        showDiagnosticsTab = preferences.object(forKey: "AudioBridge.showDiagnosticsTab") as? Bool ?? true
         resumeAtLaunch = preferences.bool(forKey: "AudioBridge.resumeAtLaunch")
         exclusiveAccessEnabled = preferences.bool(forKey: "AudioBridge.exclusiveAccess")
         manuallyStopped = preferences.object(forKey: "AudioBridge.desiredRouting") as? Bool == false
@@ -148,10 +155,10 @@ final class AppModel: ObservableObject {
                   snapshot.inputCallbacks > 0, snapshot.outputCallbacks > 0,
                   snapshot.outputFrames > 0 else { return "Starting — waiting for callbacks" }
             if snapshot.recentGlitches {
-                return "Experimental routing — recent buffer glitches"
+                return "Running — delivery warning"
             }
-            if !snapshot.inputActive || !snapshot.outputActive { return "Experimental routing — callback gap" }
-            return "Experimental routing active"
+            if !snapshot.inputActive || !snapshot.outputActive { return "Running — waiting for callbacks" }
+            return "Running"
         }
         if manuallyStopped { return "Stopped" }
         if error != nil { return "Action required" }
@@ -159,7 +166,7 @@ final class AppModel: ObservableObject {
         if inputIssue != nil || outputIssue != nil { return "Selection requires attention" }
         if permission != "Granted" { return "Microphone permission required" }
         if routeReadiness != nil { return "Selected format requires attention" }
-        return "Devices selected — ready for experimental routing"
+        return "Devices selected — ready"
     }
     var permissionCanBeRequested: Bool {
         AVAudioApplication.shared.recordPermission == .undetermined && !requestingPermission
@@ -324,6 +331,7 @@ final class AppModel: ObservableObject {
                 if case .failure(let error) = result {
                     self.handleRoutingFailure(error.localizedDescription, kind: (error as? BridgeFailure)?.kind ?? .actionRequired)
                 } else {
+                    self.routingStartedAt = Date()
                     self.recordRecovery("HAL started; callback confirmation pending")
                 }
             }
@@ -340,7 +348,7 @@ final class AppModel: ObservableObject {
         routingGeneration &+= 1
         let generation = routingGeneration
         routingRequested = false; routingTransitioning = true; manuallyStopped = true
-        engineSnapshot = nil; routingFault = nil
+        engineSnapshot = nil; routingFault = nil; routingStartedAt = nil
         engine.stop { [weak self] result in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation else { return }
@@ -355,7 +363,7 @@ final class AppModel: ObservableObject {
         recordRecovery("\(kind.rawValue): \(message)")
         routingGeneration &+= 1 // Invalidate late callbacks/completions from this attempt.
         pendingAU = nil; auUpdating = false; liveEditor = false; auEditorOpen = false; editAfterUpdate = nil
-        routingRequested = false; routingTransitioning = false
+        routingRequested = false; routingTransitioning = false; routingStartedAt = nil
         recovery.failed(kind, now: ProcessInfo.processInfo.systemUptime)
         lastRecoveryFault = message
         if kind == .recoverable {
@@ -376,7 +384,7 @@ final class AppModel: ObservableObject {
         retryWork?.cancel(); retryWork = nil
         routingGeneration &+= 1
         let generation = routingGeneration
-        routingRequested = false; routingTransitioning = true; routingFault = message
+        routingRequested = false; routingTransitioning = true; routingFault = message; routingStartedAt = nil
         engine.stop { [weak self] result in
             Task { @MainActor in
                 guard let self, self.routingGeneration == generation else { return }
@@ -423,6 +431,10 @@ final class AppModel: ObservableObject {
         // Enabling this preference never overrides a deliberate Stop.
         resumeAtLaunch = enabled
         UserDefaults.standard.set(enabled, forKey: "AudioBridge.resumeAtLaunch")
+    }
+    func setVisibleTab(_ tab: String, visible: Bool) {
+        if tab == "Remote" { showRemoteTab = visible; UserDefaults.standard.set(visible, forKey: "AudioBridge.showRemoteTab") }
+        if tab == "Diagnostics" { showDiagnosticsTab = visible; UserDefaults.standard.set(visible, forKey: "AudioBridge.showDiagnosticsTab") }
     }
     func setExclusiveAccessEnabled(_ enabled: Bool) {
         guard canEditSelections else { return }
@@ -731,6 +743,46 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    func deviceBufferDraft(uid: String, range: ValueRange?) -> UInt32? {
+        if let draft = deviceBufferDrafts[uid] { return draft }
+        guard let range, range.minimum.isFinite, range.maximum.isFinite,
+              range.minimum >= 1, range.maximum <= Double(UInt32.max), range.maximum >= range.minimum else { return nil }
+        let low = UInt32(ceil(range.minimum)), high = UInt32(floor(range.maximum))
+        guard low <= high else { return nil }
+        let initial = min(high, max(low, 64))
+        deviceBufferDrafts[uid] = initial
+        return initial
+    }
+    func setDeviceBufferDraft(uid: String, frames: UInt32) {
+        guard canEditSelections, let device = catalog.devices.first(where: { $0.uid == uid }),
+              writableBuffers.contains(uid), let range = device.bufferFrameRange,
+              Double(frames) >= range.minimum, Double(frames) <= range.maximum else { return }
+        deviceBufferDrafts[uid] = frames
+    }
+    func applyDeviceBufferDrafts() {
+        guard canEditSelections, !changingDeviceBuffer else { return }
+        let pending = AudioDirection.allCases.compactMap { direction -> (String, UInt32)? in
+            guard let uid = endpoint(direction).uid, let frames = deviceBufferDrafts[uid],
+                  device(direction)?.bufferFrames != frames else { return nil }
+            return (uid, frames)
+        }
+        guard !pending.isEmpty else { deviceBufferMessage = "Interface buffers already match the requested values."; return }
+        changingDeviceBuffer = true; deviceBufferMessage = nil
+        probeQueue.async { [weak self] in
+            let results = pending.map { uid, frames -> String in
+                do {
+                    let actual = try CoreAudioCatalog.setBufferFrames(uid: uid, frames: frames)
+                    return "\(uid): requested \(frames), driver reports \(actual) frames"
+                } catch { return "\(uid): failed — \(error.localizedDescription)" }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.changingDeviceBuffer = false
+                self.deviceBufferMessage = results.joined(separator: " · ")
+                self.refresh()
+            }
+        }
+    }
     /// Native Picker menus can extract NSImage directly and bypass SwiftUI's frame.
     /// Rasterize at font size so both its intrinsic dimensions and pixels are bounded.
     private static func menuIcon(_ source: NSImage) -> NSImage? {
@@ -766,6 +818,7 @@ final class AppModel: ObservableObject {
     }
     func requestPermission() {
         guard permissionCanBeRequested else { checkPermission(); return }
+        settingsRestorePending = true
         requestingPermission = true
         AVAudioApplication.requestRecordPermission { [weak self] _ in
             Task { @MainActor in
@@ -775,8 +828,14 @@ final class AppModel: ObservableObject {
         }
     }
     func openPrivacySettings() {
+        settingsRestorePending = true
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else { return }
         NSWorkspace.shared.open(url)
+    }
+    func consumeSettingsRestoreRequest() -> Bool {
+        let pending = settingsRestorePending
+        settingsRestorePending = false
+        return pending
     }
     func exportProbe() {
         checkPermission()
@@ -826,7 +885,8 @@ final class AppModel: ObservableObject {
                 "Queued/capacity: \(s.bufferedFrames) / \(s.capacity); queue reserve: \(s.targetFrames)",
                 "Pending source frames (accepted capture minus consumed/discarded source): \(s.pendingSourceFrames)",
                 "Underrun/overrun: \(s.underrunFrames) / \(s.overrunFrames); format faults: \(s.formatFaults)",
-                "Drift commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
+                "Measured input/output clock difference: \(s.clockEstimateValid ? "\(s.measuredClockDifferencePPM) ppm" : "unavailable"); drift correction commanded: \(s.driftPPM) ppm; rebuffers: \(s.rebufferEvents); recentered: \(s.recenterFrames)",
+                "Drift controller saturated callbacks: \(s.driftSaturatedCallbacks)",
                 "Drift applied (last callback): \(s.appliedDriftPPM) ppm; controller held: \(s.driftHeldCallbacks) callbacks; unity limited: \(s.driftLimitedCallbacks) callbacks; refill threshold: \(s.refillThresholdFrames) frames",
                 "AU latency reported: \(s.auLatencySeconds) seconds; physical output peak: \(s.physicalOutputPeak); full-scale samples: \(s.physicalOutputClips)"]
         } else { lines.append("Engine snapshot unavailable (stopped or startup not completed).") }

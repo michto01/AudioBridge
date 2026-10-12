@@ -2,7 +2,7 @@
 #define AB_ADAPTIVE_DSP_H
 #include <stdbool.h>
 #include <stdint.h>
-typedef struct { double filtered, integral, ppm; bool initialized; } ABDriftController;
+typedef struct { double filtered, integral, ppm; bool initialized, saturated; } ABDriftController;
 double ABDriftStep(ABDriftController *controller, double occupancy, double target, double sampleRate, uint32_t outputFrames);
 void ABDriftReanchor(ABDriftController *controller, double target);
 // Hold only when processed delivery is low while conserved backlog is excessive.

@@ -38,7 +38,10 @@ typedef struct {
     ABLevels inputLevels, outputLevels;
     float driftPPM;
     float appliedDriftPPM;
+    float measuredClockDifferencePPM;
+    bool clockEstimateValid;
     uint64_t driftHeldCallbacks, driftLimitedCallbacks;
+    uint64_t driftSaturatedCallbacks;
     uint32_t refillThresholdFrames;
     uint64_t recenterFrames, rebufferEvents;
     uint64_t rawInputClips1, rawInputClips2;

@@ -118,7 +118,13 @@ struct ABEngine {
     uint32_t inputBuffer;
     _Atomic uint32_t driftPPMBits, physicalOutputPeak;
     _Atomic uint32_t appliedDriftPPMBits, refillThresholdFrames;
+    _Atomic uint64_t inputClockAnchorSample, inputClockAnchorHost, outputClockAnchorSample, outputClockAnchorHost;
+    _Atomic uint64_t inputClockRateBits, outputClockRateBits;
+    _Atomic bool inputClockAnchorValid, outputClockAnchorValid, inputClockRateValid, outputClockRateValid;
+    _Atomic uint32_t measuredClockDifferenceBits;
+    _Atomic bool measuredClockDifferenceValid;
     _Atomic uint64_t driftHeldCallbacks, driftLimitedCallbacks;
+    _Atomic uint64_t driftSaturatedCallbacks;
     _Atomic uint64_t recenterFrames, rebufferEvents, physicalOutputClips;
 
 };
@@ -130,6 +136,47 @@ bool ABEngineAttachAU(ABEngine *engine, ABAUTransport *transport) {
 
 static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
 static float bits_float(uint32_t bits) { float value; memcpy(&value, &bits, sizeof(value)); return value; }
+static uint64_t double_bits(double value) { uint64_t bits; memcpy(&bits, &value, sizeof(bits)); return bits; }
+static double bits_double(uint64_t bits) { double value; memcpy(&value, &bits, sizeof(value)); return value; }
+static void record_clock_rate(ABEngine *engine, const AudioTimeStamp *timestamp, bool input) {
+    if (!timestamp || (timestamp->mFlags & (kAudioTimeStampSampleTimeValid | kAudioTimeStampHostTimeValid))
+        != (kAudioTimeStampSampleTimeValid | kAudioTimeStampHostTimeValid)
+        || !isfinite(timestamp->mSampleTime)) return;
+    _Atomic uint64_t *sampleAnchor = input ? &engine->inputClockAnchorSample : &engine->outputClockAnchorSample;
+    _Atomic uint64_t *hostAnchor = input ? &engine->inputClockAnchorHost : &engine->outputClockAnchorHost;
+    _Atomic bool *anchorValid = input ? &engine->inputClockAnchorValid : &engine->outputClockAnchorValid;
+    _Atomic uint64_t *rateBits = input ? &engine->inputClockRateBits : &engine->outputClockRateBits;
+    _Atomic bool *rateValid = input ? &engine->inputClockRateValid : &engine->outputClockRateValid;
+    uint64_t sampleNow = double_bits(timestamp->mSampleTime), hostNow = timestamp->mHostTime;
+    if (!atomic_load_explicit(anchorValid, memory_order_relaxed)) {
+        atomic_store_explicit(sampleAnchor, sampleNow, memory_order_relaxed);
+        atomic_store_explicit(hostAnchor, hostNow, memory_order_relaxed);
+        atomic_store_explicit(anchorValid, true, memory_order_release);
+        return;
+    }
+    double sampleThen = bits_double(atomic_load_explicit(sampleAnchor, memory_order_relaxed));
+    uint64_t hostThen = atomic_load_explicit(hostAnchor, memory_order_relaxed);
+    double sampleDelta = timestamp->mSampleTime - sampleThen;
+    if (sampleDelta < engine->sampleRate * 0.5 || hostNow <= hostThen) return;
+    double ratePerHostTick = sampleDelta / (double)(hostNow - hostThen);
+    if (isfinite(ratePerHostTick) && ratePerHostTick > 0) {
+        atomic_store_explicit(rateBits, double_bits(ratePerHostTick), memory_order_relaxed);
+        atomic_store_explicit(rateValid, true, memory_order_release);
+        double inRate = bits_double(atomic_load_explicit(&engine->inputClockRateBits, memory_order_relaxed));
+        double outRate = bits_double(atomic_load_explicit(&engine->outputClockRateBits, memory_order_relaxed));
+        if (atomic_load_explicit(&engine->inputClockRateValid, memory_order_acquire)
+            && atomic_load_explicit(&engine->outputClockRateValid, memory_order_acquire)
+            && isfinite(inRate) && isfinite(outRate) && outRate > 0) {
+            double ppm = (inRate / outRate - 1.0) * 1000000.0;
+            if (isfinite(ppm) && fabs(ppm) <= 100000.0) {
+                atomic_store_explicit(&engine->measuredClockDifferenceBits, float_bits((float)ppm), memory_order_relaxed);
+                atomic_store_explicit(&engine->measuredClockDifferenceValid, true, memory_order_release);
+            }
+        }
+    }
+    atomic_store_explicit(sampleAnchor, sampleNow, memory_order_relaxed);
+    atomic_store_explicit(hostAnchor, hostNow, memory_order_relaxed);
+}
 bool ABEngineConfigureDrift(ABEngine *engine, double rate, uint32_t inputBuffer) {
     if (!engine || engine->inputProc || engine->outputProc || !isfinite(rate) || rate <= 0 || !inputBuffer) return false;
     engine->sampleRate = rate; engine->inputBuffer = inputBuffer;
@@ -183,8 +230,9 @@ static void publish_levels(ABEngine *engine, ABLevels levels, bool input) {
 static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
     const AudioBufferList *input, const AudioTimeStamp *inputTime,
     AudioBufferList *output, const AudioTimeStamp *outputTime, void *context) {
-    (void)device; (void)now; (void)inputTime; (void)output; (void)outputTime;
+    (void)device; (void)now; (void)output; (void)outputTime;
     ABEngine *engine = context;
+    record_clock_rate(engine, inputTime, true);
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
     if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
         uint32_t frames;
@@ -213,8 +261,9 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
 static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
     const AudioBufferList *input, const AudioTimeStamp *inputTime,
     AudioBufferList *output, const AudioTimeStamp *outputTime, void *context) {
-    (void)device; (void)now; (void)input; (void)inputTime; (void)outputTime;
+    (void)device; (void)now; (void)input; (void)inputTime;
     ABEngine *engine = context;
+    record_clock_rate(engine, outputTime, false);
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
     // HAL supplies zeroed output buffers (AudioHardware.h). Unselected lanes remain untouched.
     if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
@@ -239,11 +288,13 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
             if (atomic_load_explicit(&engine->primed, memory_order_relaxed)) {
                 // Hold only for poor processed delivery with excess conserved backlog.
                 // A genuinely low total must still learn slower consumption.
-                if (!ABDriftShouldHold(queued.pendingFrames, engine->driftTarget, queued.outputFrames, needed, engine->prefill))
+                bool held = ABDriftShouldHold(queued.pendingFrames, engine->driftTarget, queued.outputFrames, needed, engine->prefill);
+                if (!held) {
                     ratio = ABDriftStep(&engine->drift,
                         queued.pendingFrames,
                         engine->driftTarget, engine->sampleRate, frames);
-                else atomic_fetch_add_explicit(&engine->driftHeldCallbacks, 1, memory_order_relaxed);
+                    if (engine->drift.saturated) atomic_fetch_add_explicit(&engine->driftSaturatedCallbacks, 1, memory_order_relaxed);
+                } else atomic_fetch_add_explicit(&engine->driftHeldCallbacks, 1, memory_order_relaxed);
                 atomic_store_explicit(&engine->driftPPMBits, float_bits((float)engine->drift.ppm), memory_order_relaxed);
                 if (queued.outputFrames > engine->scratchFrames * 9 / 10) {
                     uint32_t keep = engine->prefill + frames + ABResamplerLookahead();
@@ -321,8 +372,15 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
     engine->rampFrames = 960;
     engine->sampleRate = 48000; engine->inputBuffer = 512; engine->driftTarget = prefill + 17 + 256;
     atomic_init(&engine->driftPPMBits, 0); atomic_init(&engine->physicalOutputPeak, 0);
+    atomic_init(&engine->inputClockAnchorSample, 0); atomic_init(&engine->inputClockAnchorHost, 0);
+    atomic_init(&engine->outputClockAnchorSample, 0); atomic_init(&engine->outputClockAnchorHost, 0);
+    atomic_init(&engine->inputClockRateBits, 0); atomic_init(&engine->outputClockRateBits, 0);
+    atomic_init(&engine->inputClockAnchorValid, false); atomic_init(&engine->outputClockAnchorValid, false);
+    atomic_init(&engine->inputClockRateValid, false); atomic_init(&engine->outputClockRateValid, false);
+    atomic_init(&engine->measuredClockDifferenceBits, 0); atomic_init(&engine->measuredClockDifferenceValid, false);
     atomic_init(&engine->appliedDriftPPMBits, 0); atomic_init(&engine->refillThresholdFrames, 0);
     atomic_init(&engine->driftHeldCallbacks, 0); atomic_init(&engine->driftLimitedCallbacks, 0);
+    atomic_init(&engine->driftSaturatedCallbacks, 0);
     atomic_init(&engine->physicalOutputClips, 0); atomic_init(&engine->recenterFrames, 0); atomic_init(&engine->rebufferEvents, 0);
     if (!engine->ring || !engine->resampler || !engine->inputScratch || !engine->outputScratch
         || !atomic_is_lock_free(&engine->enabled) || !atomic_is_lock_free(&engine->primed)
@@ -330,7 +388,11 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
         || !atomic_is_lock_free(&engine->inputPeak1) || !atomic_is_lock_free(&engine->inputClips1)
         || !atomic_is_lock_free(&engine->appliedDriftPPMBits) || !atomic_is_lock_free(&engine->refillThresholdFrames)
         || !atomic_is_lock_free(&engine->driftHeldCallbacks) || !atomic_is_lock_free(&engine->driftLimitedCallbacks)
-        || !atomic_is_lock_free(&engine->layoutFaults)) {
+        || !atomic_is_lock_free(&engine->layoutFaults)
+        || !atomic_is_lock_free(&engine->inputClockAnchorSample)
+        || !atomic_is_lock_free(&engine->measuredClockDifferenceBits)
+        || !atomic_is_lock_free(&engine->inputClockAnchorValid)
+        || !atomic_is_lock_free(&engine->driftSaturatedCallbacks)) {
         ABEngineDestroy(engine); return NULL;
     }
     return engine;
@@ -478,10 +540,13 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     result.rawInputClips1 = atomic_load_explicit(&engine->rawInputClips1, memory_order_relaxed);
     result.rawInputClips2 = atomic_load_explicit(&engine->rawInputClips2, memory_order_relaxed);
     result.driftPPM = bits_float(atomic_load_explicit(&engine->driftPPMBits, memory_order_relaxed));
+    result.measuredClockDifferencePPM = bits_float(atomic_load_explicit(&engine->measuredClockDifferenceBits, memory_order_relaxed));
+    result.clockEstimateValid = atomic_load_explicit(&engine->measuredClockDifferenceValid, memory_order_acquire);
     result.appliedDriftPPM = bits_float(atomic_load_explicit(&engine->appliedDriftPPMBits, memory_order_relaxed));
     result.refillThresholdFrames = atomic_load_explicit(&engine->refillThresholdFrames, memory_order_relaxed);
     result.driftHeldCallbacks = atomic_load_explicit(&engine->driftHeldCallbacks, memory_order_relaxed);
     result.driftLimitedCallbacks = atomic_load_explicit(&engine->driftLimitedCallbacks, memory_order_relaxed);
+    result.driftSaturatedCallbacks = atomic_load_explicit(&engine->driftSaturatedCallbacks, memory_order_relaxed);
     result.recenterFrames = atomic_load_explicit(&engine->recenterFrames, memory_order_relaxed);
     result.rebufferEvents = atomic_load_explicit(&engine->rebufferEvents, memory_order_relaxed);
     result.physicalOutputPeak = bits_float(atomic_load_explicit(&engine->physicalOutputPeak, memory_order_relaxed));

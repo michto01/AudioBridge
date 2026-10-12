@@ -14,6 +14,7 @@ extension AppModel {
 
 struct PlaybackView: View {
     @ObservedObject var model: AppModel
+    let selectAudio: () -> Void
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -29,10 +30,16 @@ struct PlaybackView: View {
                         .background(.quaternary, in: Capsule())
                 }
                 HStack(alignment: .center, spacing: 8) {
-                    PlaybackEndpointCard(model: model, direction: .input)
+                    PlaybackEndpointCard(model: model, direction: .input, selectAudio: selectAudio)
                     Image(systemName: "arrow.right").font(.title2.weight(.semibold)).foregroundStyle(.secondary)
                         .accessibilityLabel("routes to")
-                    PlaybackEndpointCard(model: model, direction: .output)
+                    PlaybackEndpointCard(model: model, direction: .output, selectAudio: selectAudio)
+                }
+                if model.routingRequested, let started = model.routingStartedAt {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("Running for \(elapsed(context.date.timeIntervalSince(started)))")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
                 if model.showDebugInformation, let s = model.engineSnapshot, model.routingRequested, s.recentGlitches {
                     Text("Delivery warning clears after 20 healthy seconds · \(Int(min(20, s.glitchCleanSeconds)))/20 s. Historical counters remain in Diagnostics.")
@@ -40,18 +47,20 @@ struct PlaybackView: View {
                 }
                 HStack {
                     RoutingToggleButton(model: model)
-                    Spacer()
-                    Button("Copy status") { model.copyStatus() }
                 }
                 if let fault = model.routingFault { Text(fault).foregroundStyle(.red) }
                 if !model.routingRequested, let reason = model.startUnavailableReason {
                     Text("Start unavailable: \(reason)").font(.caption).foregroundStyle(.secondary)
                 }
                 DelayView(model: model)
-                Text("Experimental supervised routing. Stop cancels recovery and stays stopped after relaunch. Configure devices/buffers in Audio, patches in Routing, plugins in Effects and launch behavior in General.")
+                Text("Stop cancels recovery and stays stopped after relaunch. Configure devices and buffers in Audio, patches in Routing, plugins in Effects and launch behavior in General.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
+    }
+    private func elapsed(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
     }
 }
 
@@ -73,17 +82,19 @@ struct RoutingToggleButton: View {
 private struct PlaybackEndpointCard: View {
     @ObservedObject var model: AppModel
     let direction: AudioDirection
+    let selectAudio: () -> Void
     private var device: DeviceFacts? { model.device(direction) }
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
+                Button(action: selectAudio) {
+                HStack(spacing: 12) {
                     if let device {
                         DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid])
-                            .frame(width: 20, height: 20)
+                            .frame(width: 42, height: 42)
                     } else {
                         Image(systemName: direction == .input ? "mic" : "speaker.wave.2")
-                            .frame(width: 20, height: 20)
+                            .font(.system(size: 28)).frame(width: 42, height: 42)
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(direction == .input ? "INPUT DEVICE" : "OUTPUT DEVICE")
@@ -91,9 +102,10 @@ private struct PlaybackEndpointCard: View {
                         Text(device?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
                             .font(.headline).lineLimit(1).truncationMode(.middle)
                     }
-                }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain).contentShape(Rectangle())
                 if let device {
-                    Text("\(device.facts(for: direction).channelCount ?? 0) channels · \((device.nominalSampleRate ?? 0).formatted(.number.precision(.fractionLength(0)))) Hz")
+                    Text("\(device.facts(for: direction).channelCount ?? 0) channels · \(rate(device.nominalSampleRate))")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text("Device not connected").font(.caption).foregroundStyle(.secondary)
@@ -102,25 +114,37 @@ private struct PlaybackEndpointCard: View {
                 GainControl(model: model, direction: direction)
                 if direction == .output {
                     OutputDeviceVolumeControl(model: model)
-                }
+                } else { Color.clear.frame(height: 32) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 285, alignment: .topLeading)
             .padding(3)
         }
         .frame(maxWidth: .infinity)
+    }
+    private func rate(_ value: Double?) -> String {
+        guard let value else { return "Unknown rate" }
+        let kilohertz = value / 1000
+        let precision = kilohertz.rounded() == kilohertz ? 0 : 1
+        return "\(kilohertz.formatted(.number.precision(.fractionLength(precision)))) kHz"
     }
 }
 
 private struct DelayView: View {
     @ObservedObject var model: AppModel
+    @State private var bridgeSamples: [(Date, Double)] = []
+    @State private var averagedBridgeMilliseconds: Double?
+    @State private var delayAverageReady = false
     var body: some View {
         GroupBox("Delay & processing") {
             VStack(alignment: .leading, spacing: 8) {
                 if let s = model.engineSnapshot, let estimate = model.delayEstimate {
                     Text(model.routingRequested ? (s.primed ? "Live estimate" : "Startup — estimate not steady") : "Last run snapshot")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text(estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { "Bridge + callback buffers: ~\(number($0)) ms" }
-                        ?? "Bridge + callback buffers: incomplete estimate")
+                    Text(delayAverageReady
+                        ? averagedBridgeMilliseconds.map { "Bridge + callback buffers: ~\(number($0)) ms average (5 s)" } ?? "Bridge + callback buffers: incomplete estimate"
+                        : estimate.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]).map { "Bridge + callback buffers: ~\(number($0)) ms · smoothing over 5 s" }
+                            ?? "Bridge + callback buffers: incomplete estimate")
                         .font(.headline)
                     if model.showDebugInformation {
                     Text(estimate.subtotalMilliseconds(categories: [.deviceReported]).map { "Device-reported delay: \(number($0)) ms" } ?? "Device-reported delay: Unknown / incomplete")
@@ -141,8 +165,9 @@ private struct DelayView: View {
                         .font(.caption.monospacedDigit())
                     DisclosureGroup("Buffer delivery diagnostics") {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Drift command / applied: \(number(Double(s.driftPPM))) / \(number(Double(s.appliedDriftPPM))) ppm")
+                            Text("Measured input/output clock difference: \(s.clockEstimateValid ? "\(number(Double(s.measuredClockDifferencePPM))) ppm" : "unavailable") · correction command / applied: \(number(Double(s.driftPPM))) / \(number(Double(s.appliedDriftPPM))) ppm")
                             Text("Controller held: \(s.driftHeldCallbacks) · unity limited: \(s.driftLimitedCallbacks) callbacks")
+                            Text("Correction command saturated: \(s.driftSaturatedCallbacks) callbacks")
                             Text("Current refill threshold: \(s.refillThresholdFrames) frames")
                             Text("AU blocks over duration budget: \(s.auRenderOverBudgetBlocks) / \(s.auRenderBlocks)")
                             Text("Polling wakeups late by more than a block: \(s.auWorkerLateWakeups) / \(s.auWorkerWaits)")
@@ -175,6 +200,13 @@ private struct DelayView: View {
                 }
             }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
+            guard let value = model.delayEstimate?.subtotalMilliseconds(categories: [.bridge, .callbackBuffer]) else { return }
+            bridgeSamples = bridgeSamples.filter { date.timeIntervalSince($0.0) <= 5 } + [(date, value)]
+            averagedBridgeMilliseconds = bridgeSamples.map(\.1).reduce(0, +) / Double(bridgeSamples.count)
+            delayAverageReady = bridgeSamples.count >= 5
+        }
+        .onChange(of: model.routingStartedAt) { _, _ in bridgeSamples.removeAll(); averagedBridgeMilliseconds = nil; delayAverageReady = false }
     }
     private func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) }
 }

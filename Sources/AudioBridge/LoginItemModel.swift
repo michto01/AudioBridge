@@ -43,6 +43,7 @@ struct GeneralSettingsView: View {
     @ObservedObject var model: AppModel
     @StateObject private var login = LoginItemModel()
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Start at login", isOn: Binding(get: { login.registered }, set: { login.setEnabled($0) }))
                 .disabled(login.changing || (!login.available && !login.registered))
@@ -54,13 +55,32 @@ struct GeneralSettingsView: View {
             if login.status == .requiresApproval { Button("Open Login Items Settings") { login.openSystemSettings() } }
             if let error = login.error { Text(error).foregroundStyle(.red) }
             Divider()
+            GroupBox("Privacy") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Microphone permission: \(model.permission)")
+                    HStack {
+                        Button("Request microphone permission") { model.requestPermission() }
+                            .disabled(!model.permissionCanBeRequested)
+                        Button("Open Privacy Settings") { model.openPrivacySettings() }
+                    }
+                    Text("Permission is requested only when you press the button. Capture begins only after you press Start.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            GroupBox("Settings tabs") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Show Remote tab", isOn: Binding(get: { model.showRemoteTab }, set: { model.setVisibleTab("Remote", visible: $0) }))
+                    Toggle("Show Diagnostics tab", isOn: Binding(get: { model.showDiagnosticsTab }, set: { model.setVisibleTab("Diagnostics", visible: $0) }))
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
             Toggle("Resume routing when the app launches", isOn: Binding(get: { model.resumeAtLaunch }, set: { model.setResumeAtLaunch($0) }))
             Text("Press Start once after configuring your route. A deliberate Stop stays stopped across relaunch, even with resume enabled. Quit preserves the last routing intent.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Recoverable device and callback failures retry using the selected UIDs. Permission, configuration and unsafe teardown faults require action. No alternative output is selected.")
                 .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-        }.padding()
+        }.padding().onAppear { model.checkPermission() }
+        }
         .onAppear { login.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
     }

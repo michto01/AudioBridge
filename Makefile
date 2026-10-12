@@ -2,6 +2,8 @@ SHELL := /bin/bash
 BUILD_CONFIGURATION ?= debug
 DIST_DIR ?= dist
 APP := $(DIST_DIR)/AudioBridge.app
+SWIFT_BUILD_OPTIONS ?=
+export SWIFT_BUILD_OPTIONS
 
 .PHONY: doctor build test probe app run sign verify release clean
 .NOTPARALLEL:
@@ -13,13 +15,13 @@ doctor:
 	@xcrun --sdk macosx --show-sdk-path
 
 build:
-	swift build -c $(BUILD_CONFIGURATION)
+	swift build -c $(BUILD_CONFIGURATION) $(SWIFT_BUILD_OPTIONS)
 
 test:
 	BUILD_CONFIGURATION="$(BUILD_CONFIGURATION)" ./scripts/test.sh
 
 probe:
-	swift run -c $(BUILD_CONFIGURATION) AudioBridgeProbe
+	swift run -c $(BUILD_CONFIGURATION) $(SWIFT_BUILD_OPTIONS) AudioBridgeProbe
 
 app: build
 	BUILD_CONFIGURATION="$(BUILD_CONFIGURATION)" DIST_DIR="$(DIST_DIR)" ./scripts/package-app.sh

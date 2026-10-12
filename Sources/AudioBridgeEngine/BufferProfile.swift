@@ -6,9 +6,9 @@ public enum BufferProfile: String, CaseIterable, Sendable {
     public var title: String { rawValue.capitalized }
     public func targetFrames(deviceBuffer: UInt32) -> UInt32 {
         switch self {
-        case .low: return max(256, deviceBuffer * 2)
-        case .balanced: return max(1024, deviceBuffer * 4)
-        case .robust: return max(4096, deviceBuffer * 8)
+        case .low: return max(64, deviceBuffer)
+        case .balanced: return max(64, deviceBuffer * 2)
+        case .robust: return max(256, deviceBuffer * 4)
         }
     }
 }

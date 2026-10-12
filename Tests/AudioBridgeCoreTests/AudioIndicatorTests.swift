@@ -18,9 +18,11 @@ final class AudioIndicatorTests: XCTestCase {
         XCTAssertEqual(levels.clips2, 1)
     }
     func testProvisionalBufferMargins() {
-        XCTAssertEqual(BufferProfile.low.targetFrames(deviceBuffer: 512), 1024)
-        XCTAssertEqual(BufferProfile.balanced.targetFrames(deviceBuffer: 512), 2048)
-        XCTAssertEqual(BufferProfile.robust.targetFrames(deviceBuffer: 512), 4096)
-        XCTAssertEqual(BufferProfile.robust.targetFrames(deviceBuffer: 4096), 32768)
+        XCTAssertEqual(BufferProfile.low.targetFrames(deviceBuffer: 512), 512)
+        XCTAssertEqual(BufferProfile.balanced.targetFrames(deviceBuffer: 64), 128)
+        XCTAssertEqual(BufferProfile.balanced.targetFrames(deviceBuffer: 32), 64)
+        XCTAssertEqual(BufferProfile.balanced.targetFrames(deviceBuffer: 16), 64)
+        XCTAssertEqual(BufferProfile.robust.targetFrames(deviceBuffer: 512), 2048)
+        XCTAssertEqual(BufferProfile.robust.targetFrames(deviceBuffer: 4096), 16384)
     }
 }

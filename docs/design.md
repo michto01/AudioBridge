@@ -11,25 +11,24 @@ Native macOS controls, compact spacing, restrained status colors, no dashboard c
 │ ◉ Audio Bridge                  ● Running │
 │                                          │
 │ INPUT   Selected Core Audio Input       48 kHz 2ch │
-│ L ███████░░░  -12 dBFS                  │
-│ R ██████░░░░  -16 dBFS                  │
+│ L ███████░░░  -12 dB                    │
+│ R ██████░░░░  -16 dB                    │
 │                                          │
 │ OUTPUT  Mac Headphones        48 kHz 2ch │
-│ L ██████░░░░  -13 dBFS                  │
-│ R █████░░░░░  -17 dBFS                  │
+│ L ██████░░░░  -13 dB                    │
+│ R █████░░░░░  -17 dB                    │
 │                                          │
-│ Gain   ─────●────────          0.0 dB   │
-│ Matrix  Custom                        ⚙ │
+│ Output device volume ────●──    70%     │
 │                                          │
-│ ✓ Healthy    [Stop]   [Settings…]       │
+│ ✓ Running    [Stop]   [Settings…]       │
 └──────────────────────────────────────────┘
 ```
 
-Meters must have numeric dBFS values, visible clipping flags, and an explicit inactive/unknown state. Static prototype meter values must never ship as production data.
+The menu popover has compact endpoint names, meters, output-device volume and Start/Stop/Settings/Quit. Digital trim controls remain in the main Bridge settings window. Meters use whole-dB labels, visible clipping flags, and explicit inactive/unknown state. Static prototype meter values must never ship as production data.
 
 ## Settings window
 
-Tabs or sections: `Audio` (devices, actual format, gain, effects, latency profile); `Routing` (input mix grid, presets, output patches); `General` (launch at login, auto-routing, appearance); `Diagnostics` (state, device identities, sample rates, FIFO occupancy, under/overruns, resampling correction, recovery history, Copy status/export); `About` (version, licences).
+Tabs or sections: `Bridge` (Start/Stop, runtime, equal input/output endpoint cards, linked trim sliders and delay); `Audio` (devices, actual format, interface buffer drafts and separate FIFO reserve); `Routing` (input mix grid, presets, output patches); `Effects` (AU chain); `General` (permissions, launch/resume, tab visibility); optional `Remote` (HTTP/OSC endpoints and independent status); optional `Diagnostics` (technical state, device identities, counters, Copy status/export); `About` (quick-start and settings guide).
 
 ### Routing grid (ADR-002)
 
@@ -39,7 +38,7 @@ A second grid shows selected output name with physical output rows × Mix L/Mix 
 
 Stereo input meters show the mixed/trimmed bus before effects; output meters show stereo after effects/drift/gain. Physical input full-scale counts and physical output summation counts are separate diagnostics. Native names and physical indices stay in the product UI; technical UIDs remain in Diagnostics/Copy status. Original 2×2 settings migrate with a backup; the matrix moves ahead of effects, requiring listening acceptance.
 
-Menu-bar waveform status: grey idle/unconfigured; green fresh healthy local callbacks/primed buffers; amber startup/rebuffering/degraded; red actionable fault. After a delivery fault, amber clears after 20 continuously healthy seconds with fresh callbacks, primed output and unchanged glitch counters; new glitches/callback gaps restart the window. Cumulative counters remain in Diagnostics. Clipping and silence do not enter delivery health. Colour is accompanied by popover text and an accessibility label. No signal/silence-based alarm or automatic recovery is implied. Copy status copies relevant plain-text diagnostics without audio or saved plugin state.
+Menu-bar waveform status: grey idle/unconfigured; green fresh healthy local callbacks/primed buffers; amber startup/rebuffering/degraded; red actionable fault. After actual delivery loss, amber clears after 20 continuously healthy seconds; new underruns, overruns, format faults or callback gaps restart the window. Queue recentering and rebuffer bookkeeping alone do not count as lost frames. Cumulative counters remain in Diagnostics. Clipping and silence do not enter delivery health. Colour is accompanied by popover text and an accessibility label. No signal/silence-based alarm or automatic recovery is implied. Copy status copies relevant plain-text diagnostics without audio or saved plugin state.
 
 ### Gain
 
@@ -47,7 +46,7 @@ Digital output gain: provisional -60 to +12 dB; 0 dB default; smooth changes. Di
 
 ## Status vocabulary
 
-Settings tabs: **Bridge** (waveform icon) holds the single two-state Start/Stop control, stereo meters/linked gains and delay/processing telemetry; **Audio** holds UID device selection, current driver buffers, bridge fill and permission; **Routing** holds patch grids; **Effects** holds AU catalog/chain/editor controls. General, Diagnostics and About remain separate. Menu-bar quick controls remain available. The full-chain delay display explicitly distinguishes an estimated allowance from loopback measurement, retains Unknown device reports, and separates AU processing wall time from reported signal latency. Interface buffer drafts begin with the real current driver value, otherwise 128 frames clamped to a valid reported range; changes require explicit Apply while stopped.
+Settings tabs: **Bridge** holds the two-state Start/Stop control, runtime, stereo meters/linked trim sliders and delay; **Audio** holds UID device selection and driver buffer drafts, with bridge FIFO clearly separate; **Routing** holds patch grids; **Effects** holds AU controls. General holds permission and tab visibility. Copy status is available in Diagnostics only. Delay is a five-second rolling average for dynamic bridge terms; detailed current snapshots remain available in Diagnostics. Device buffer drafts start at 64 frames when within the reported range, never write until explicit Apply while stopped, and show readback. FIFO Balanced defaults to `max(64, 2 × larger current device buffer)` and applies next Start.
 
 - **Stopped** — operator disabled routing; no retry.
 - **Waiting for input/output** — selected UID missing; automatic retry active.

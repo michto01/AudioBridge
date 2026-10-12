@@ -38,7 +38,7 @@ final class RecentGlitchesTests: XCTestCase {
         tracker.update(now: 51, healthy: true, counters: counts)
         XCTAssertFalse(tracker.active)
     }
-    func testRecenterCountsAndUnhealthyDeliveryAreNotHidden() {
+    func testRecenteringIsNotLossButUnhealthyDeliveryIsStillReported() {
         var tracker = RecentGlitches()
         tracker.update(now: 0, healthy: true, counters: .init())
         tracker.update(now: 1, healthy: false, counters: .init())
@@ -49,6 +49,8 @@ final class RecentGlitchesTests: XCTestCase {
         tracker.update(now: 121, healthy: true, counters: .init(recentered: 10))
         XCTAssertFalse(tracker.active)
         tracker.update(now: 122, healthy: true, counters: .init(recentered: 11))
+        XCTAssertFalse(tracker.active)
+        tracker.update(now: 123, healthy: true, counters: .init(underruns: 1, recentered: 11))
         XCTAssertTrue(tracker.active)
     }
 }

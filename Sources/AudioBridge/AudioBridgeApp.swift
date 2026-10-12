@@ -14,15 +14,19 @@ struct AudioBridgeApp: App {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Audio Bridge").font(.headline)
                 RoutingStatusLabel(model: model)
-                Text("Experimental adaptive routing; hardware validation pending.").foregroundStyle(.secondary)
+                if model.routingRequested, let started = model.routingStartedAt {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("Running for \(elapsed(context.date.timeIntervalSince(started)) )")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
                 if let fault = model.routingFault { Text(fault).font(.caption).foregroundStyle(.red) }
                 Divider()
                 Text("Input: \(endpointName(.input))")
-                GainControl(model: model, direction: .input)
                 SignalMeters(model: model, direction: .input)
                 Text("Output: \(endpointName(.output))")
-                GainControl(model: model, direction: .output)
                 SignalMeters(model: model, direction: .output)
+                OutputDeviceVolumeControl(model: model)
                 if let issue = model.inputIssue { Text(issue).font(.caption) }
                 if let issue = model.outputIssue { Text(issue).font(.caption) }
                 if !model.routingRequested, let reason = model.startUnavailableReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
@@ -31,7 +35,6 @@ struct AudioBridgeApp: App {
                     FocusSettingsButton()
                     Button("Quit") { model.quit() }
                 }
-                Button("Copy status") { model.copyStatus() }.font(.caption)
             }
             .padding().frame(width: 380)
         } label: {
@@ -47,6 +50,10 @@ struct AudioBridgeApp: App {
     }
     private func endpointName(_ direction: AudioDirection) -> String {
         model.device(direction)?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing")
+    }
+    private func elapsed(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
     }
 }
 
@@ -109,15 +116,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 private struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @State private var selectedTab = "Bridge"
     var body: some View {
-        TabView {
-            PlaybackView(model: model)
-                .tabItem { Label("Bridge", systemImage: "waveform") }
+        TabView(selection: $selectedTab) {
+            PlaybackView(model: model, selectAudio: { selectedTab = "Audio" })
+                .tabItem { Label("Bridge", systemImage: "arrow.left.arrow.right") }.tag("Bridge")
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error = model.error { Text(error).foregroundStyle(.red) }
                     endpointPicker(.input)
                     endpointPicker(.output)
+                    HStack {
+                        Button("Apply interface buffer requests") { model.applyDeviceBufferDrafts() }
+                            .disabled(!model.canEditSelections || model.changingDeviceBuffer)
+                        Text("Requires routing stopped. Queue reserve settings are saved separately and take effect next Start.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     GroupBox("Device access") {
                         VStack(alignment: .leading, spacing: 8) {
                             Toggle("Request exclusive device access while routing", isOn: Binding(
@@ -133,15 +147,6 @@ private struct SettingsView: View {
                     BufferSettings(model: model)
                     Text("For microphone-to-speaker checks, start with the Mac's volume low to avoid acoustic feedback. Output meters show local samples; system speaker volume is separate.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Divider()
-                    Text("Microphone permission: \(model.permission)")
-                    HStack {
-                        Button("Request microphone permission") { model.requestPermission() }
-                            .disabled(!model.permissionCanBeRequested)
-                        Button("Open Privacy Settings") { model.openPrivacySettings() }
-                    }
-                    Text("Permission is requested only when you press the button. Capture begins only after you press Start.")
-                        .font(.caption).foregroundStyle(.secondary)
                     Button(model.refreshing ? "Refreshing…" : "Refresh devices and permission") { model.refresh() }
                         .disabled(model.refreshing)
                     if model.recovery.desired || model.routingRequested || model.routingTransitioning {
@@ -150,20 +155,21 @@ private struct SettingsView: View {
                     Text("Recoverable failures retry the selected route. Resume and login options are in General.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
-            }.tabItem { Label("Audio", systemImage: "waveform") }
+            }.tabItem { Label("Audio", systemImage: "hifispeaker") }.tag("Audio")
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Patches and cell gains can change live. Start/Stop is in Bridge.").font(.caption).foregroundStyle(.secondary)
                     MatrixSettings(model: model)
                 }.padding()
-            }.tabItem { Label("Routing", systemImage: "point.3.connected.trianglepath.dotted") }
+            }.tabItem { Label("Routing", systemImage: "point.3.connected.trianglepath.dotted") }.tag("Routing")
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     AUEffectsView(model: model)
                 }.padding()
-            }.tabItem { Label("Effects", systemImage: "slider.horizontal.3") }
-            GeneralSettingsView(model: model).tabItem { Label("General", systemImage: "gearshape") }
-            RemoteSettingsView(remote: model.remoteControl).tabItem { Label("Remote", systemImage: "network") }
+            }.tabItem { Label("Effects", systemImage: "puzzlepiece.extension") }.tag("Effects")
+            GeneralSettingsView(model: model).tabItem { Label("General", systemImage: "gearshape") }.tag("General")
+            if model.showRemoteTab { RemoteSettingsView(remote: model.remoteControl).tabItem { Label("Remote", systemImage: "network") }.tag("Remote") }
+            if model.showDiagnosticsTab {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.status).font(.headline)
@@ -175,7 +181,7 @@ private struct SettingsView: View {
                         }
                     }
                     Toggle("Show debug information in the interface", isOn: $model.showDebugInformation)
-                    Text("Shows live queue, drift, AU timing and detailed delay readouts in Bridge and Audio. Off by default at launch; diagnostic reports always include full details.")
+                    Text("Adds live buffer, drift, AU timing and detailed delay readouts to the interface. Copy Status always includes the technical diagnostics.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development") · bundle: \(Bundle.main.bundlePath)")
                         .font(.caption)
@@ -184,7 +190,7 @@ private struct SettingsView: View {
                         Text("Captured / rendered frames: \(metrics.inputFrames) / \(metrics.outputFrames)")
                         Text("FIFO: \(metrics.bufferedFrames) frames · prefill complete: \(metrics.primed ? "yes" : "no")")
                         Text("Underrun / overrun frames: \(metrics.underrunFrames) / \(metrics.overrunFrames) · format faults: \(metrics.formatFaults)")
-                        Text("Engine rate: \(metrics.sampleRate.formatted()) Hz · correction: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm")
+                        Text("Engine rate: \((metrics.sampleRate / 1000).formatted(.number.precision(.fractionLength(0)))) kHz · measured clock difference: \(metrics.clockEstimateValid ? "\(metrics.measuredClockDifferencePPM.formatted(.number.precision(.fractionLength(1)))) ppm" : "unavailable") · correction command: \(metrics.driftPPM.formatted(.number.precision(.fractionLength(1)))) ppm")
                         Text("Rebuffer events: \(metrics.rebufferEvents) · recentered frames discarded: \(metrics.recenterFrames)")
                         Text("Input clipped samples: \(metrics.inputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
                         Text("Output clipped samples: \(metrics.outputLevels.map { String($0.clippedSamples) }.joined(separator: " / "))")
@@ -214,18 +220,36 @@ private struct SettingsView: View {
                     }
                     if model.catalog.devices.isEmpty { Text("No devices discovered; inspect errors or refresh.") }
                 }.padding().textSelection(.enabled)
-            }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Audio Bridge").font(.title2)
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development") — experimental supervised routing")
-                Text("The bridge does not record or transmit audio. Third-party Audio Units run separately and control their own behavior.")
-            }.padding().tabItem { Label("About", systemImage: "info.circle") }
+            }.tabItem { Label("Diagnostics", systemImage: "stethoscope") }.tag("Diagnostics")
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Audio Bridge").font(.title2)
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development")")
+                    Text("Quick start").font(.headline)
+                    Text("1. In Audio, select the input and output by name. Check their sample rates and buffer settings.\n2. In Routing, choose a mono or stereo preset, then verify the physical channels.\n3. In Effects, add and configure optional Audio Units.\n4. Return to Bridge and press Start. Confirm fresh meters and a running status before relying on the route.")
+                    Text("Audio Bridge mixes selected physical input channels to stereo, processes the optional stereo effect chain and copies the result to selected physical outputs. It does not record or transmit audio. Hardware timing and sustained unattended operation still require validation with your devices.")
+                    Text("Settings guide").font(.headline)
+                    Text("Audio configures devices, permission, exclusive access and buffers. Routing patches channels. Effects configures Audio Units. General controls login, resume and visible tabs. Remote documents API and OSC endpoints. Diagnostics contains Copy Status and technical counters.")
+                    Text("Separate interface buffers and the bridge FIFO are intentional: the first is configured by each device driver; the second is Audio Bridge's software reserve. Matching nominal sample rates are currently required. Independent device clocks are handled by adaptive drift correction.")
+                }.padding()
+            }.tabItem { Label("About", systemImage: "info.circle") }.tag("About")
         }
         .frame(minWidth: 760, minHeight: 560)
         .padding().frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 680)
         .onAppear { model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.checkPermission()
+            if model.consumeSettingsRestoreRequest() {
+                SettingsWindowFocus.requested = true
+                DispatchQueue.main.async { SettingsWindowFocus.bringForward() }
+            }
+        }
+        .onChange(of: model.showRemoteTab) { _, visible in
+            if !visible && selectedTab == "Remote" { selectedTab = "General" }
+        }
+        .onChange(of: model.showDiagnosticsTab) { _, visible in
+            if !visible && selectedTab == "Diagnostics" { selectedTab = "General" }
         }
     }
     private func endpointPicker(_ direction: AudioDirection) -> some View {
@@ -252,7 +276,7 @@ private struct SettingsView: View {
                 }.disabled(!model.canEditSelections)
                 if let device {
                     DeviceBufferControl(model: model, device: device).id(device.uid)
-                    Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate)) Hz")
+                    Text("\(device.facts(for: direction).channelCount.map(String.init) ?? "Unknown") channels · \(rate(device.nominalSampleRate))")
                         .font(.caption)
                     if model.showDebugInformation, let range = device.bufferFrameRange {
                         Text("Supported buffer range: \(range.minimum.formatted())–\(range.maximum.formatted()) frames").font(.caption)
@@ -277,7 +301,12 @@ private struct SettingsView: View {
             }
         }.font(.callout)
     }
-    private func rate(_ value: Double?) -> String { value.map { $0.formatted() } ?? "unknown" }
+    private func rate(_ value: Double?) -> String {
+        guard let value else { return "unknown" }
+        let kilohertz = value / 1000
+        let precision = kilohertz.rounded() == kilohertz ? 0 : 1
+        return "\(kilohertz.formatted(.number.precision(.fractionLength(precision)))) kHz"
+    }
     private func format(_ value: StreamFormat?) -> String {
         guard let value else { return "unknown" }
         let representation = value.isFloat ? "float" : (value.isSignedInteger ? "signed int" : "other")

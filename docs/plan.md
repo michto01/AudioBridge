@@ -92,6 +92,8 @@ User-authorized device-access follow-up: 0.5.0/build 22 adds an opt-in request f
 
 User-authorized output-volume follow-up: 0.5.0/build 23 adds a distinct selected-device master-volume slider beside software output gain in the Bridge output card. It reads and writes the explicit output UID through the Core Audio volume scalar property on a utility queue, verifies readback and indicates absent/read-only controls. Device volume/physical output checks remain pending. See [device volume results](device-volume-results.md).
 
+User-authorized UI/stability refinement: 0.5.1/build 24 keeps trim sliders in the main Bridge window only; drafts 64-frame interface buffers with explicit combined Apply; uses a separate 64-frame-minimum, twice-device-buffer FIFO default; moves permission controls to General; adds tab visibility and service-specific remote status/control; averages dynamic delay over five seconds; and distinguishes timestamp-measured clock difference from correction commands. Recent-delivery warning ignores queue recenter bookkeeping while preserving real underrun/overrun/format counts. See [UI/stability refinement results](ui-stability-refinement-results.md). Build, app packaging, ad-hoc signing and verification pass. Tests and visual, network, audio, clock and unattended acceptance remain unrun.
+
 ## Suggested release milestones
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.

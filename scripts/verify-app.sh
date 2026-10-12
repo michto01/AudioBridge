@@ -14,8 +14,8 @@ check CFBundleExecutable AudioBridge
 check CFBundlePackageType APPL
 check LSMinimumSystemVersion 14.0
 check LSUIElement true
-check CFBundleShortVersionString 0.5.0
-check CFBundleVersion 23
+check CFBundleShortVersionString 0.5.1
+check CFBundleVersion 24
 check CFBundleIconFile AudioBridge.icns
 [[ -s "$APP/Contents/Resources/AudioBridge.icns" ]]
 DESCRIPTION="$(/usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$PLIST")"

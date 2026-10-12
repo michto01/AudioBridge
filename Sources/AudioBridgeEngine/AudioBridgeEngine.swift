@@ -29,8 +29,11 @@ public struct EngineSnapshot: Sendable {
     public let auResponse: AULiveResponse?
     public let driftPPM: Float
     public let appliedDriftPPM: Float
+    public let measuredClockDifferencePPM: Float
+    public let clockEstimateValid: Bool
     public let driftHeldCallbacks: UInt64
     public let driftLimitedCallbacks: UInt64
+    public let driftSaturatedCallbacks: UInt64
     public let refillThresholdFrames: UInt32
     public let recenterFrames: UInt64
     public let rebufferEvents: UInt64
@@ -297,7 +300,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         }
         let auResponse = auHost?.response
         recentGlitches.update(now: ProcessInfo.processInfo.systemUptime,
-            healthy: fault == nil && metrics.primed && inputActive && outputActive && metrics.outputFrames > 0,
+            healthy: fault == nil && inputActive && outputActive && metrics.outputFrames > 0,
             counters: DeliveryCounters(underruns: metrics.underrunFrames, overruns: metrics.overrunFrames,
                 formatFaults: metrics.formatFaults, rebuffers: metrics.rebufferEvents, recentered: metrics.recenterFrames))
         if let reason = fault, let cleanup = stopOnQueue() { fault = "\(reason) \(cleanup)"; faultKind = .unsafeTeardown }
@@ -315,7 +318,10 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             rawInputClips: [metrics.rawInputClips1, metrics.rawInputClips2],
             auLatencySeconds: auLatency, auProcessedFrames: auFrames, auResponse: auResponse,
             driftPPM: metrics.driftPPM, appliedDriftPPM: metrics.appliedDriftPPM,
+            measuredClockDifferencePPM: metrics.measuredClockDifferencePPM,
+            clockEstimateValid: metrics.clockEstimateValid,
             driftHeldCallbacks: metrics.driftHeldCallbacks, driftLimitedCallbacks: metrics.driftLimitedCallbacks,
+            driftSaturatedCallbacks: metrics.driftSaturatedCallbacks,
             refillThresholdFrames: metrics.refillThresholdFrames,
             recenterFrames: metrics.recenterFrames, rebufferEvents: metrics.rebufferEvents,
             physicalOutputPeak: metrics.physicalOutputPeak, physicalOutputClips: metrics.physicalOutputClips,

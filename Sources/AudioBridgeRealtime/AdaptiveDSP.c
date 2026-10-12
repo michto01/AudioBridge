@@ -14,14 +14,23 @@ double ABDriftStep(ABDriftController *c, double occupancy, double target, double
     if (!c->initialized) { c->filtered = target; c->initialized = true; }
     c->filtered += dt / (2.0 + dt) * (occupancy - c->filtered);
     double error = (c->filtered - target) / rate; // seconds of excess queued audio
-    c->integral = clamp(c->integral + error * dt * 10000.0, -800, 800);
-    double requested = clamp(c->integral + error * 200000.0, -1000, 1000);
+    double proposedIntegral = clamp(c->integral + error * dt * 10000.0, -800, 800);
+    double proposed = proposedIntegral + error * 200000.0;
+    // Anti-windup: do not integrate farther into a saturated correction.
+    if ((proposed > 1000 && error > 0) || (proposed < -1000 && error < 0)) {
+        proposedIntegral = c->integral;
+        proposed = proposedIntegral + error * 200000.0;
+    }
+    c->integral = proposedIntegral;
+    c->saturated = proposed > 1000 || proposed < -1000;
+    double requested = clamp(proposed, -1000, 1000);
     c->ppm += clamp(requested - c->ppm, -50 * dt, 50 * dt);
     return 1 + c->ppm * 1e-6; // Faster capture -> consume more input per output frame.
 }
 void ABDriftReanchor(ABDriftController *c, double target) {
     if (!c || !isfinite(target) || target <= 0) return;
     c->filtered = target; c->initialized = true;
+    c->saturated = false;
     // Preserve the bounded running correction, remove a stale occupancy error.
     c->integral = clamp(c->ppm, -800, 800);
 }

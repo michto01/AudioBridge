@@ -6,4 +6,5 @@ cd "$ROOT"
 # Build tests in an isolated temporary directory so default SwiftPM signing works.
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/AudioBridge-tests.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
-swift test -c "${BUILD_CONFIGURATION:-debug}" --scratch-path "$SCRATCH"
+read -r -a SWIFT_BUILD_ARGS <<< "${SWIFT_BUILD_OPTIONS:-}"
+swift test -c "${BUILD_CONFIGURATION:-debug}" "${SWIFT_BUILD_ARGS[@]}" --scratch-path "$SCRATCH"
