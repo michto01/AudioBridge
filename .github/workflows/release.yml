@@ -1,10 +1,12 @@
-name: macOS ZIP release
+name: macOS ZIP artifact
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
@@ -25,8 +27,11 @@ jobs:
         run: |
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           test "$RELEASE_TAG" = "v$VERSION"
-      - name: Publish ZIP and checksum
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/AudioBridge-macOS.zip dist/AudioBridge-macOS.zip.sha256 --generate-notes
+      - name: Upload ZIP and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioBridge-${{ github.ref_name }}-macOS
+          path: |
+            dist/AudioBridge-macOS.zip
+            dist/AudioBridge-macOS.zip.sha256
+          if-no-files-found: error
