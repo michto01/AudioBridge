@@ -6,7 +6,6 @@ import SwiftUI
 /// A compact monitoring surface. Configuration and digital trims stay in Settings.
 struct MenuPopoverView: View {
     @ObservedObject var model: AppModel
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 14) {
@@ -31,12 +30,10 @@ struct MenuPopoverView: View {
             Divider()
             HStack(spacing: 10) {
                 RoutingToggleButton(model: model, fillsWidth: true)
-                Button {
-                    SettingsWindowFocus.show { openSettings() }
-                } label: {
+                SettingsLink {
                     Label(L("Settings…"), systemImage: "gearshape.fill")
                         .frame(maxWidth: .infinity)
-                }.buttonStyle(.bordered)
+                }.buttonStyle(FocusedSettingsLinkStyle())
                 Button { model.quit() } label: {
                     Label(L("Quit"), systemImage: "xmark")
                 }.buttonStyle(.bordered)
@@ -91,6 +88,18 @@ struct MenuPopoverView: View {
     private func elapsed(_ interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval))
         return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+    }
+}
+
+/// Use the macOS 14 SettingsLink action while keeping activation and focus
+/// identical for mouse and keyboard activation. No newer environment API needed.
+private struct FocusedSettingsLinkStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            SettingsWindowFocus.show { configuration.trigger() }
+        } label: {
+            configuration.label
+        }.buttonStyle(.bordered)
     }
 }
 
