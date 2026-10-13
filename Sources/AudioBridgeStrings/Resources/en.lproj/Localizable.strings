@@ -334,6 +334,7 @@
 "Routing" = "Routing";
 "Running" = "Running";
 "Audio routing for macOS" = "Audio routing for macOS";
+"Volume" = "Volume";
 "Starting…" = "Starting…";
 "Needs attention" = "Needs attention";
 "Running for %@" = "Running for %@";

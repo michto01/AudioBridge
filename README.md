@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.7.0/build 39 refreshes the menu popover with a prominent app header, matched input/output cards, signal-flow link and a single Settings action. Device selection stays in Settings; current meters and audio behavior are preserved. See [menu redesign](docs/menu-0.7-results.md). The preceding 0.6.5 audio audit fixes passed 72 tests; the timed 12-hour and broader hardware gates remain open.**
+Status: **0.7.1/build 40 refines the menu popover: one native outer surface, larger device names, a compact localized volume label, no info-button focus decoration and meters using the card width without an empty CLIP column. Device selection stays in Settings; audio behavior is preserved. See [menu redesign and corrections](docs/menu-0.7-results.md). The preceding 0.6.5 audio audit fixes passed 72 tests; the timed 12-hour and broader hardware gates remain open.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 

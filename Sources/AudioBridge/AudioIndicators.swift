@@ -11,7 +11,7 @@ struct InfoButton: View {
     @State private var showing = false
     var body: some View {
         Button { showing.toggle() } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
-            .buttonStyle(.plain).accessibilityLabel(title)
+            .buttonStyle(.plain).focusEffectDisabled().accessibilityLabel(title)
             .popover(isPresented: $showing, arrowEdge: .top) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -34,11 +34,13 @@ struct SignalMeters: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var telemetry: EngineTelemetry
     let direction: AudioDirection
+    let compact: Bool
     @State private var clipUntil = [Date.distantPast, Date.distantPast]
     @State private var displayedDB = [-60.0, -60.0]
-    init(model: AppModel, direction: AudioDirection) {
+    init(model: AppModel, direction: AudioDirection, compact: Bool = false) {
         self.model = model
         self.direction = direction
+        self.compact = compact
         telemetry = model.telemetry
     }
     var body: some View {
@@ -50,15 +52,25 @@ struct SignalMeters: View {
             ForEach(0..<2, id: \.self) { lane in
                 let level = levels?[lane]
                 let db = level?.decibels ?? -.infinity
+                let clipped = fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date())
                 HStack(spacing: 8) {
                     Text(L("Mix \(lane == 0 ? "L" : "R")"))
                         .font(.caption).frame(width: 44, alignment: .leading)
                     MeterBar(fraction: fresh ? min(1, max(0, (displayedDB[lane] + 60) / 60)) : 0)
                         .frame(height: 8)
+                        .overlay(alignment: .trailing) {
+                            if compact && clipped {
+                                Text("CLIP").font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.red).padding(.horizontal, 2)
+                                    .background(.background)
+                            }
+                        }
                     Text(fresh ? (db.isFinite ? String(format: L("%.0f dB"), db) : L("−∞ dB")) : LT("Inactive"))
                         .font(.caption.monospacedDigit()).frame(width: 70, alignment: .trailing)
-                    Text(fresh && ((level?.amplitude ?? 0) >= 1 || clipUntil[lane] > Date()) ? "CLIP" : "")
-                        .font(.caption.bold()).foregroundStyle(.red).frame(width: 32)
+                    if !compact {
+                        Text(clipped ? "CLIP" : "")
+                            .font(.caption.bold()).foregroundStyle(.red).frame(width: 32)
+                    }
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -239,6 +251,7 @@ struct GainControl: View {
 struct OutputDeviceVolumeControl: View {
     @ObservedObject var model: AppModel
     var allowsDigitalFallback = true
+    var compactLabel = false
     private var volume: Binding<Double> {
         Binding(get: { model.outputDeviceVolume ?? 1 }, set: { model.setOutputDeviceVolume($0) })
     }
@@ -252,7 +265,8 @@ struct OutputDeviceVolumeControl: View {
                 }
             } else if model.outputDeviceVolumeWritable {
                 HStack(spacing: 8) {
-                    Text(L("Device volume")).font(.caption).frame(width: 80, alignment: .leading)
+                    Text(LT(compactLabel ? "Volume" : "Device volume"))
+                        .font(.caption).fixedSize(horizontal: true, vertical: false)
                     Slider(value: volume, in: 0...1)
                         .accessibilityLabel(L("Selected output device volume"))
                     Text(model.outputDeviceVolume.map { L("\(Int(($0 * 100).rounded()))%") } ?? "—")

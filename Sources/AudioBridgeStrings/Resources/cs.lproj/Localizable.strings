@@ -334,6 +334,7 @@
 "Routing" = "Směrování";
 "Running" = "Běží";
 "Audio routing for macOS" = "Směrování zvuku pro macOS";
+"Volume" = "Hlasitost";
 "Starting…" = "Spouštění…";
 "Needs attention" = "Vyžaduje zásah";
 "Running for %@" = "Běží %@";

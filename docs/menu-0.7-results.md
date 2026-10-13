@@ -1,5 +1,13 @@
 # 0.7 menu popover — build 39
 
+## 0.7.1 / build 40 corrections
+
+Operator feedback identified double outer corners, clipped Czech volume text, persistent info-button focus decoration, small device names and blank space beside the meter values. The correction removes the extra painted outer material/border and uses MenuBarExtra's native surface/corners. Endpoint card styling is retained. Device names use 15-point semibold type with a matching two-line height on both cards. The menu volume label is shortened to **Volume / Hlasitost**, sized to its intrinsic width; Settings retains the full device-volume label with intrinsic sizing as well.
+
+Info buttons suppress the SwiftUI focus effect while remaining buttons with keyboard/accessibility activation. Menu meters omit the reserved trailing CLIP column; a real CLIP indication overlays the meter only while active, leaving dB at the right edge. Settings meters retain their separate CLIP column. Meter sampling, animation and audio processing are unchanged.
+
+Release `make sign` (including build/app packaging) and `make verify DIST_DIR=/tmp/AudioBridge-0.7.1-final` passed. Bundle: `/tmp/AudioBridge-0.7.1-final/AudioBridge.app`, version 0.7.1/build 40, stable `cz.bytelab.audiobridge` identity and macOS 14.0 minimum. Host/helper signatures, embedded plist and both localization files verify. No tests were added or run; rendered UI and keyboard/accessibility behavior still require operator review. The running app was not replaced or launched.
+
 The operator supplied a visual reference on 2026-10-13 and requested its hierarchy/identity, while retaining existing meters and leaving source selection in Settings.
 
 ## Implemented

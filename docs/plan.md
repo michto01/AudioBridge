@@ -134,6 +134,8 @@ Gate: deterministic queue/wake/ownership checks, device drop/re-arm checks, plug
 
 ## 0.7 — Menu presentation (current UI review slice)
 
+Visual correction: 0.7.1/build 40 removes the second painted outer surface, shortens the localized menu volume label, suppresses info-button focus decoration, enlarges device names and removes blank trailing meter columns in the menu while retaining live CLIP indications. Build/signature/identity checks pass; visual acceptance remains open. See [corrections](menu-0.7-results.md).
+
 User authorized the reference-inspired popover on 2026-10-13. Version 0.7.0/build 39 adds a stronger app/status header, matched read-only endpoint cards, a flow arrow, output-device volume and one Settings action. Existing meters, Start/Stop/re-arm semantics and audio processing remain intact. See [menu results](menu-0.7-results.md). Gate: operator review in English/Czech and light/dark appearance, long or missing device names, disabled controls and warning/re-arm states. This UI slice does not close the open 0.6 audio/hardware gates.
 
 ## Suggested release milestones (unchanged)

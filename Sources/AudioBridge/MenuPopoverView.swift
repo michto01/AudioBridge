@@ -26,7 +26,7 @@ struct MenuPopoverView: View {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(.title3).foregroundStyle(.secondary)
                     .frame(width: 32)
-                OutputDeviceVolumeControl(model: model, allowsDigitalFallback: false)
+                OutputDeviceVolumeControl(model: model, allowsDigitalFallback: false, compactLabel: true)
             }
             Divider()
             HStack(spacing: 10) {
@@ -45,13 +45,8 @@ struct MenuPopoverView: View {
         }
         .padding(18)
         .frame(width: 440)
-        // Use semantic system surfaces so light appearance and accessibility contrast work.
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
-                .allowsHitTesting(false)
-        }
+        // MenuBarExtra supplies the material and outer corners. Painting another
+        // rounded surface here exposes the native panel behind its corners.
     }
 
     private var header: some View {
@@ -121,12 +116,12 @@ private struct MenuEndpointCard: View {
                     Text(LT(direction == .input ? "Input device" : "Output device"))
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                     Text(device?.name ?? LT(model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
-                        .font(.headline).lineLimit(2)
-                        .frame(height: 34, alignment: .leading)
+                        .font(.system(size: 15, weight: .semibold)).lineLimit(2)
+                        .frame(height: 38, alignment: .leading)
                         .help(device?.name ?? L("Device not connected"))
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-            SignalMeters(model: model, direction: direction)
+            SignalMeters(model: model, direction: direction, compact: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
