@@ -2,6 +2,8 @@
 
 ## 0.7.1 / build 40 corrections
 
+Packaging follow-up: default `make BUILD_CONFIGURATION=release sign` exposed an empty-array expansion failure under stock macOS Bash 3.2 with `set -u`. Packaging and test scripts now expand absent build options as zero arguments while preserving nonempty option arrays. This changes shell invocation only, not app metadata or processing. The exact command now builds and packages successfully; signing in repository `dist/` fails because File Provider reattaches `com.apple.FinderInfo`. Output on local `/tmp` storage avoids that limitation. The test suite was not rerun for this shell correction.
+
 Operator feedback identified double outer corners, clipped Czech volume text, persistent info-button focus decoration, small device names and blank space beside the meter values. The correction removes the extra painted outer material/border and uses MenuBarExtra's native surface/corners. Endpoint card styling is retained. Device names use 15-point semibold type with a matching two-line height on both cards. The menu volume label is shortened to **Volume / Hlasitost**, sized to its intrinsic width; Settings retains the full device-volume label with intrinsic sizing as well.
 
 Info buttons suppress the SwiftUI focus effect while remaining buttons with keyboard/accessibility activation. Menu meters omit the reserved trailing CLIP column; a real CLIP indication overlays the meter only while active, leaving dB at the right edge. Settings meters retain their separate CLIP column. Meter sampling, animation and audio processing are unchanged.

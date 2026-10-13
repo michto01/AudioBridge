@@ -7,4 +7,5 @@ cd "$ROOT"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/AudioBridge-tests.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 read -r -a SWIFT_BUILD_ARGS <<< "${SWIFT_BUILD_OPTIONS:-}"
-swift test -c "${BUILD_CONFIGURATION:-debug}" "${SWIFT_BUILD_ARGS[@]}" --scratch-path "$SCRATCH"
+# Preserve zero arguments for an empty option list under stock Bash 3.2 nounset.
+swift test -c "${BUILD_CONFIGURATION:-debug}" ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"} --scratch-path "$SCRATCH"

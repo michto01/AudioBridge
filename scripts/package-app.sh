@@ -5,7 +5,8 @@ cd "$ROOT"
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-debug}"
 case "$BUILD_CONFIGURATION" in debug|release) ;; *) echo "Invalid build configuration" >&2; exit 1;; esac
 read -r -a SWIFT_BUILD_ARGS <<< "${SWIFT_BUILD_OPTIONS:-}"
-BINARY_DIR="$(swift build -c "$BUILD_CONFIGURATION" "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
+# Stock macOS Bash 3.2 treats an empty array as unset under nounset.
+BINARY_DIR="$(swift build -c "$BUILD_CONFIGURATION" ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"} --show-bin-path)"
 BINARY="$BINARY_DIR/AudioBridge"
 DIST="${DIST_DIR:-dist}"
 case "$DIST" in /*) ;; *) DIST="$ROOT/$DIST";; esac
