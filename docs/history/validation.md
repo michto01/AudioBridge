@@ -50,4 +50,8 @@ Default build/package now works without extra Swift arguments after the Bash 3.2
 
 ## Open release evidence
 
+### CI concurrency compatibility correction (2026-10-13)
+
+GitHub's macOS runner rejected nested callbacks in AppModel that implicitly captured an outer weak `self`; buffer-result delivery also captured a mutable array. Main-actor tasks/dispatch closures now take their own weak captures, and buffer delivery passes an immutable message. The matching remote callback pattern was corrected too. Local `make build` passed with Swift 6.4 after allowing SwiftPM compiler-cache access; the sandboxed attempt failed on cache permissions. The older CI toolchain, new hardware behavior and unit suite were not exercised locally for this patch. The published v0.7.1 tag is unchanged.
+
 Timed 12-hour dry/full-chain soak, physical loopback/quality, representative external drivers, full loss/re-arm/sleep/login/permissions, actual remote socket shutdown, third-party editor failure paths, clean-account install, Intel/macOS 14 runtime and visual/accessibility checks remain open. GitHub CI/tag workflow was authored; local builds don't certify remote workflow execution. Historical acceptance statements must not be promoted to results for a later revision.

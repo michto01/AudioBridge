@@ -342,7 +342,7 @@ final class AppModel: ObservableObject {
             if routingRequested {
                 let generation = routingGeneration
                 engine.setRouting(next) { [weak self] result in
-                    Task { @MainActor in
+                    Task { @MainActor [weak self] in
                         guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                         if case .failure(let error) = result {
                             self.stopForActionRequired("Routing change failed: \(error.localizedDescription)")
@@ -381,7 +381,7 @@ final class AppModel: ObservableObject {
                      auFrames: simpleAudioMode ? nil : customAUFrames, inputTrim: inputTrim, outputGain: effectiveOutputGain, effects: auChain, chainBypass: chainBypassed,
                      effectsProcessingEnabled: effectsProcessingEnabled,
                      exclusiveAccess: exclusiveAccessEnabled, updated: { [weak self] snapshot in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 self.engineSnapshot = snapshot
                 if let response = snapshot.auResponse, response.id == self.pendingAU?.id {
@@ -413,7 +413,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }, completion: { [weak self] result in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.routingGeneration == generation else { return }
                 self.routingTransitioning = false
                 if case .failure(let error) = result {
@@ -439,7 +439,7 @@ final class AppModel: ObservableObject {
         routingRequested = false; routingTransitioning = true; manuallyStopped = true
         engineSnapshot = nil; routingFault = nil; routingStartedAt = nil
         engine.stop { [weak self] result in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.routingGeneration == generation else { return }
                 self.routingTransitioning = false
                 if case .failure(let error) = result {
@@ -484,7 +484,7 @@ final class AppModel: ObservableObject {
         let generation = routingGeneration
         routingRequested = false; routingTransitioning = true; routingFault = message; routingStartedAt = nil
         engine.stop { [weak self] result in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.routingGeneration == generation else { return }
                 if case .failure(let error) = result {
                     self.handleRoutingFailure("\(message) \(error.localizedDescription)", kind: .unsafeTeardown)
@@ -580,7 +580,7 @@ final class AppModel: ObservableObject {
         outputDeviceVolumeError = nil; outputDeviceVolumeLoading = true
         outputVolumeQueue.async { [weak self] in
             let result = Result { try CoreAudioCatalog.outputVolume(uid: uid) }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 guard let self, self.outputVolumeGeneration == generation, self.selection.output.uid == uid else { return }
                 self.outputDeviceVolumeLoading = false; self.outputVolumeResolvedUID = uid
                 switch result {
@@ -608,7 +608,7 @@ final class AppModel: ObservableObject {
         outputVolumeWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             let result = Result { try CoreAudioCatalog.setOutputVolume(uid: uid, scalar: Float(scalar)) }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 guard let self, self.outputVolumeGeneration == generation, self.selection.output.uid == uid else { return }
                 switch result {
                 case .success(let actual): self.outputDeviceVolume = Double(actual); self.outputDeviceVolumeError = nil
@@ -660,7 +660,7 @@ final class AppModel: ObservableObject {
                     if let data = try? Data(contentsOf: directory.appendingPathComponent("progress.json")),
                        let count = try? JSONDecoder().decode(Int.self, from: data), count != previousCount {
                         previousCount = count
-                        Task { @MainActor in self?.auScanCount = count }
+                        Task { @MainActor [weak self] in self?.auScanCount = count }
                     }
                     usleep(100_000)
                 }
@@ -669,7 +669,7 @@ final class AppModel: ObservableObject {
                 guard data.count <= 8 * 1024 * 1024 else { throw AUError("Effect catalog exceeds safety limit.") }
                 let cache = try JSONDecoder().decode(AUCatalogCache.self, from: data); try cache.validate(); return cache
             }
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 switch result {
                 case .success(let cache):
@@ -734,7 +734,7 @@ final class AppModel: ObservableObject {
             process.arguments = ["edit", input.path, output.path]
             process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
             process.terminationHandler = { [weak self] process in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self else { try? FileManager.default.removeItem(at: directory); return }
                     self.auEditorOpen = false; self.auEditor = nil; self.auEditorDirectory = nil
                     defer { try? FileManager.default.removeItem(at: directory) }
@@ -760,7 +760,7 @@ final class AppModel: ObservableObject {
     func cancelAUEditor() {
         if liveEditor {
             engine.auControl(closeEditor: true) { [weak self] result in
-                Task { @MainActor in if case .failure(let error) = result { self?.error = error.localizedDescription } }
+                Task { @MainActor [weak self] in if case .failure(let error) = result { self?.error = error.localizedDescription } }
             }
             return
         }
@@ -773,7 +773,7 @@ final class AppModel: ObservableObject {
     private func sendAU(_ command: AULiveCommand) {
         pendingAU = command; auUpdating = command.edit == nil
         engine.auCommand(command) { [weak self] result in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.pendingAU?.id == command.id else { return }
                 if case .failure(let error) = result {
                     self.pendingAU = nil; self.auUpdating = false; self.liveEditor = false; self.auEditorOpen = false
@@ -806,7 +806,7 @@ final class AppModel: ObservableObject {
         }
         let generation = routingGeneration
         engine.auControl(effectsProcessingEnabled: effectsProcessingEnabled) { [weak self] result in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                 if case .failure(let error) = result {
                     self.stopForActionRequired("Effect processing switch failed: \(error.localizedDescription)")
@@ -825,7 +825,7 @@ final class AppModel: ObservableObject {
         if hasLiveAUHost {
             let generation = routingGeneration
             engine.auControl(bypass: bypass) { [weak self] result in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self, self.routingGeneration == generation, self.routingRequested else { return }
                     if case .failure(let error) = result {
                         self.stopForActionRequired("Chain bypass could not be applied: \(error.localizedDescription)")
@@ -842,7 +842,7 @@ final class AppModel: ObservableObject {
             let result = Result { try CoreAudioCatalog.snapshot() }
             let writable = (try? result.get().devices.filter { CoreAudioCatalog.bufferIsSettable($0.runtimeID) }.map(\.uid)) ?? []
             let rates = (try? result.get().devices.filter { CoreAudioCatalog.rateIsSettable($0.runtimeID) }.map(\.uid)) ?? []
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 var routeDevicesChanged = false
                 self.writableBuffers = Set(writable); self.writableRates = Set(rates)
@@ -889,7 +889,7 @@ final class AppModel: ObservableObject {
         changingDeviceBuffer = true; deviceBufferMessage = nil
         probeQueue.async { [weak self] in
             let result = Result { try CoreAudioCatalog.setBufferFrames(uid: uid, frames: frames) }
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.changingDeviceBuffer = false
                 switch result {
@@ -959,10 +959,11 @@ final class AppModel: ObservableObject {
                     return "Requested \(frames), driver reports \(actual) frames"
                 } catch { return "Buffer request failed — \(error.localizedDescription)" }
             }
-            DispatchQueue.main.async {
+            let message = results.joined(separator: " · ")
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.changingDeviceBuffer = false
-                self.deviceBufferMessage = results.joined(separator: " · ")
+                self.deviceBufferMessage = message
                 self.refresh()
             }
         }
@@ -1005,7 +1006,7 @@ final class AppModel: ObservableObject {
         settingsRestorePending = true
         requestingPermission = true
         AVAudioApplication.requestRecordPermission { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.requestingPermission = false
                 self?.checkPermission()
             }

@@ -140,9 +140,9 @@ final class RemoteControlServer: ObservableObject {
             let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: UInt16(httpPort))!)
             listener.newConnectionLimit = 16
             listener.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in guard let self, self.httpEpoch.accepts(generation) else { return }; self.httpStatus = Self.describe(state); self.updateSummary() }
+                Task { @MainActor [weak self] in guard let self, self.httpEpoch.accepts(generation) else { return }; self.httpStatus = Self.describe(state); self.updateSummary() }
             }
-            listener.newConnectionHandler = { [weak self] connection in Task { @MainActor in guard let self else { connection.cancel(); return }; self.acceptHTTP(connection, generation: generation) } }
+            listener.newConnectionHandler = { [weak self] connection in Task { @MainActor [weak self] in guard let self else { connection.cancel(); return }; self.acceptHTTP(connection, generation: generation) } }
             listener.start(queue: queue); httpListener = listener; httpStatus = "Starting"
         } catch { httpStatus = "Failed — \(error.localizedDescription)" }
         updateSummary()
@@ -154,10 +154,10 @@ final class RemoteControlServer: ObservableObject {
         do {
             let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: UInt16(oscPort))!)
             listener.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in guard let self, self.oscEpoch.accepts(generation) else { return }; self.oscStatus = Self.describe(state); self.updateSummary() }
+                Task { @MainActor [weak self] in guard let self, self.oscEpoch.accepts(generation) else { return }; self.oscStatus = Self.describe(state); self.updateSummary() }
             }
             listener.newConnectionHandler = { [weak self] connection in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self, self.oscEpoch.accepts(generation) else { connection.cancel(); return }
                     self.track(connection, http: false, generation: generation)
                     connection.start(queue: self.queue); self.receiveOSC(connection, generation: generation)
@@ -176,7 +176,7 @@ final class RemoteControlServer: ObservableObject {
         let connection = NWConnection(host: NWEndpoint.Host(feedbackHost), port: port, using: .udp)
         connection.stateUpdateHandler = { [weak self] state in
             if case .failed(let error) = state {
-                Task { @MainActor in guard let self, self.oscEnabled, self.oscFeedbackGeneration == generation else { return }; self.updateStatus("OSC feedback failed: \(error.localizedDescription)") }
+                Task { @MainActor [weak self] in guard let self, self.oscEnabled, self.oscFeedbackGeneration == generation else { return }; self.updateStatus("OSC feedback failed: \(error.localizedDescription)") }
             }
         }
         connection.start(queue: queue)
@@ -188,7 +188,7 @@ final class RemoteControlServer: ObservableObject {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.oscEnabled, self.oscFeedbackGeneration == generation else { return }
                 self.sendOSCStatus()
             }
@@ -222,7 +222,7 @@ final class RemoteControlServer: ObservableObject {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .cancelled, .failed:
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self else { return }
                     if http, self.httpEpoch.accepts(generation) { self.httpConnections.removeValue(forKey: id) }
                     if !http, self.oscEpoch.accepts(generation) { self.oscConnections.removeValue(forKey: id) }
@@ -239,7 +239,7 @@ final class RemoteControlServer: ObservableObject {
     }
     private func receiveHTTP(_ connection: NWConnection, accumulated: Data, generation: UUID) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, complete, error in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.httpEpoch.accepts(generation) else { connection.cancel(); return }
                 var bytes = accumulated
                 if let data { bytes.append(data) }
@@ -277,7 +277,7 @@ final class RemoteControlServer: ObservableObject {
 
     private func receiveOSC(_ connection: NWConnection, generation: UUID) {
         connection.receiveMessage { [weak self] data, _, _, error in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.oscEpoch.accepts(generation) else { connection.cancel(); return }
                 if let data, data.count <= 1024,
                    let source = connection.endpoint.hostAddress,
