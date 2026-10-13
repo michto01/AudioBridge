@@ -333,6 +333,9 @@
 "Retry stage" = "Stupeň opakování";
 "Routing" = "Směrování";
 "Running" = "Běží";
+"Audio routing for macOS" = "Směrování zvuku pro macOS";
+"Starting…" = "Spouštění…";
+"Needs attention" = "Vyžaduje zásah";
 "Running for %@" = "Běží %@";
 "Running — delivery warning" = "Běží — varování o přenosu";
 "Running — waiting for callbacks" = "Běží — čeká na zvuková data";

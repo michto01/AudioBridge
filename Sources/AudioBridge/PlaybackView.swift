@@ -77,6 +77,7 @@ struct PlaybackView: View {
 
 struct RoutingToggleButton: View {
     @ObservedObject var model: AppModel
+    var fillsWidth = false
     @State private var confirmingRearm = false
     private var stopping: Bool { model.canStopRouting }
     var body: some View {
@@ -86,6 +87,7 @@ struct RoutingToggleButton: View {
             else { model.startRouting() }
         } label: {
             Label(LT(stopping ? "Stop" : (model.requiresRearm ? "Re-arm…" : "Start")), systemImage: stopping ? "stop.fill" : "play.fill")
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
         }
         .disabled(!stopping && !model.canStartRouting)
         .tint(stopping ? .red : .accentColor)

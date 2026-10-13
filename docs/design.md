@@ -33,7 +33,7 @@ Diagnostics groups delivery, queues/clocks, Audio Unit timing, signal levels and
 └──────────────────────────────────────────┘
 ```
 
-The menu popover has compact endpoint names, meters, output-device volume and Start/Stop/Settings/Quit. Digital trim controls remain in the main Bridge settings window. Meters use whole-dB labels, visible clipping flags, and explicit inactive/unknown state. Static prototype meter values must never ship as production data.
+The 0.7 menu popover follows the operator's visual reference: prominent app icon/title/subtitle and colored status with runtime at the top, matched rounded input/output cards with explicitly scaled device icons, a downward signal-flow link, a separate output-device volume row and a footer with one two-state Start/Stop action, one Settings action and Quit. Endpoint names are read-only; selections remain in Settings → Audio. System materials and semantic colors adapt to light/dark appearance. Status reasons stay behind the header info button. Digital trim controls remain in the main Bridge settings window. Existing meters keep whole-dB labels, visible clipping flags, and explicit inactive/unknown state. Static prototype meter values must never ship as production data. See [0.7 results](menu-0.7-results.md).
 
 ## Settings window
 

@@ -13,32 +13,7 @@ struct AudioBridgeApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(L("Audio Bridge")).font(.headline)
-                    Spacer()
-                    InfoButton(title: L("Bridge status"), message: model.bridgeStatusHelp)
-                }
-                RoutingStatusLabel(model: model)
-                if model.routingRequested, let started = model.routingStartedAt {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(L("Running for \(elapsed(context.date.timeIntervalSince(started)) )"))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                }
-                Divider()
-                Text(L("Input: \(endpointName(.input))"))
-                SignalMeters(model: model, direction: .input)
-                Text(L("Output: \(endpointName(.output))"))
-                SignalMeters(model: model, direction: .output)
-                OutputDeviceVolumeControl(model: model, allowsDigitalFallback: false)
-                HStack {
-                    RoutingToggleButton(model: model)
-                    FocusSettingsButton()
-                    Button(L("Quit")) { model.quit() }
-                }
-            }
-            .padding().frame(width: 380)
+            MenuPopoverView(model: model)
             .environment(\.locale, Locale(identifier: model.interfaceLanguage))
         } label: {
             Image(nsImage: MenuStatusIcon.image(model.activity)).renderingMode(.original)
@@ -52,25 +27,10 @@ struct AudioBridgeApp: App {
                 .environment(\.locale, Locale(identifier: model.interfaceLanguage))
         }
     }
-    private func endpointName(_ direction: AudioDirection) -> String {
-        model.device(direction)?.name ?? (model.endpoint(direction).uid == nil ? "Unconfigured" : L("Selected device missing"))
-    }
-    private func elapsed(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
-    }
 }
 
 @MainActor
-private struct FocusSettingsButton: View {
-    @Environment(\.openSettings) private var openSettings
-    var body: some View {
-        Button(L("Settings…")) { SettingsWindowFocus.show { openSettings() } }
-    }
-}
-
-@MainActor
-private enum SettingsWindowFocus {
+enum SettingsWindowFocus {
     static weak var window: NSWindow?
     static var requested = false
     static func show(_ open: () -> Void) {

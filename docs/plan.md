@@ -132,7 +132,11 @@ User authorized this slice on 2026-10-12. [ADR-003](decisions/ADR-003-reliabilit
 
 Gate: deterministic queue/wake/ownership checks, device drop/re-arm checks, plugin isolation comparisons at 128 input / 32 output / 128 reserve, physical loopback latency and a 12-hour run with bounded queues and no lost frames. The automated suite passes for 0.6.5; actual driver/plugin interleavings and the runtime gates remain pending. Build/signature checks do not complete the gate. Stop for review; no distribution or unattended readiness claim.
 
-## Suggested release milestones
+## 0.7 — Menu presentation (current UI review slice)
+
+User authorized the reference-inspired popover on 2026-10-13. Version 0.7.0/build 39 adds a stronger app/status header, matched read-only endpoint cards, a flow arrow, output-device volume and one Settings action. Existing meters, Start/Stop/re-arm semantics and audio processing remain intact. See [menu results](menu-0.7-results.md). Gate: operator review in English/Czech and light/dark appearance, long or missing device names, disabled controls and warning/re-arm states. This UI slice does not close the open 0.6 audio/hardware gates.
+
+## Suggested release milestones (unchanged)
 
 `v0.1` UI + device probe; `v0.2` stereo bridge; `v0.3` drift compensation and DSP; `v0.4` recovery/login; `v1.0` validated hardware build.
 

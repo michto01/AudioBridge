@@ -333,6 +333,9 @@
 "Retry stage" = "Retry stage";
 "Routing" = "Routing";
 "Running" = "Running";
+"Audio routing for macOS" = "Audio routing for macOS";
+"Starting…" = "Starting…";
+"Needs attention" = "Needs attention";
 "Running for %@" = "Running for %@";
 "Running — delivery warning" = "Running — delivery warning";
 "Running — waiting for callbacks" = "Running — waiting for callbacks";
