@@ -96,7 +96,9 @@ struct MenuPopoverView: View {
 private struct FocusedSettingsLinkStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button {
-            SettingsWindowFocus.show { configuration.trigger() }
+            Task { @MainActor in
+                SettingsWindowFocus.show { configuration.trigger() }
+            }
         } label: {
             configuration.label
         }.buttonStyle(.bordered)
