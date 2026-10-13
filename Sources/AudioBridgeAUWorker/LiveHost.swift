@@ -34,6 +34,9 @@ final class RenderDriver: @unchecked Sendable {
         ABAUTransportReady(transport, initialLatency)
         while true {
             guard ABAUTransportWaitForBlock(transport, current.frames) else { return }
+            let cycleStart = ABAUTransportClock()
+            var adoptionTicks: UInt64 = 0
+            var adopted = false
             if let pointer = ABRendererExchangeTake(exchange) {
                 let next = Unmanaged<Renderer>.fromOpaque(pointer).takeUnretainedValue()
                 next.wetMix = current.wetMix
@@ -41,6 +44,7 @@ final class RenderDriver: @unchecked Sendable {
                 autoreleasepool { current.installRenderContext() }
                 ABAUTransportSetLatency(transport, current.latencySeconds)
                 ABRendererExchangeAcknowledge(exchange, pointer)
+                adopted = true; adoptionTicks = ABAUTransportClock() - cycleStart
             }
             let enabled = ABAUTransportEffectsProcessingEnabled(transport)
             let bypass = ABAUTransportBypassed(transport)
@@ -54,6 +58,7 @@ final class RenderDriver: @unchecked Sendable {
             } else {
                 succeeded = current.processBlock(bypass: bypass, effectsProcessingEnabled: enabled)
             }
+            ABAUTransportRecordCycleTicks(transport, cycleStart, adoptionTicks, adopted)
             if !succeeded { return }
         }
     }

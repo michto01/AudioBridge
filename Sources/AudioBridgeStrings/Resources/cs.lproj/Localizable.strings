@@ -437,3 +437,8 @@
 "Search effects or manufacturers…" = "Hledat efekty nebo výrobce…";
 "Clear search" = "Vymazat hledání";
 "No matching effects" = "Žádné odpovídající efekty";
+"Complete worker cycle · mean run" = "Celý cyklus zpracování · průměr běhu";
+"Complete worker cycle · maximum run" = "Celý cyklus zpracování · maximum běhu";
+"Worker cycles over budget · run" = "Cykly nad časovým limitem · běh";
+"Chain adoption · maximum run" = "Převzetí řetězce · maximum běhu";
+"\n\nComplete worker-cycle time includes chain adoption, render-context hooks and autorelease-pool cleanup after processing; it excludes idle waits. It is not signal latency. Cycle and adoption values are run totals and are not cleared by Reset counters." = "\n\nDoba celého cyklu zahrnuje převzetí řetězce, předání kontextu zpracování a uvolnění dočasných objektů po zpracování; nezahrnuje čekání na vstupní data. Nejde o zpoždění signálu. Hodnoty cyklu a převzetí řetězce platí pro celý běh a tlačítko Vynulovat počítadla je nemaže.";

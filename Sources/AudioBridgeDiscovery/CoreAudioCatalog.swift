@@ -13,40 +13,42 @@ public enum CoreAudioCatalog {
 
     /// Reads the selected device's master output volume control, if its driver exposes one.
     public static func outputVolume(uid: String) throws -> OutputVolume? {
-        guard let device = try snapshot().devices.first(where: { $0.uid == uid }), device.alive == true,
-              try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+        let runtimeID = try resolveUID(uid)
+        guard try scalar(runtimeID, kAudioDevicePropertyDeviceIsAlive, initial: UInt32(0)) == 1,
+              try string(runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
             throw ProbeError.invalid("Selected output device is unavailable or its identity changed.")
         }
         var property = address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput)
-        guard AudioObjectHasProperty(device.runtimeID, &property) else { return nil }
+        guard AudioObjectHasProperty(runtimeID, &property) else { return nil }
         var scalar: Float = 0
         var size = UInt32(MemoryLayout<Float>.size)
-        try check(AudioObjectGetPropertyData(device.runtimeID, &property, 0, nil, &size, &scalar), device.runtimeID, property.mSelector)
+        try check(AudioObjectGetPropertyData(runtimeID, &property, 0, nil, &size, &scalar), runtimeID, property.mSelector)
         guard size == MemoryLayout<Float>.size, scalar.isFinite else {
             throw ProbeError.invalid("Selected output returned an invalid master volume value.")
         }
         var settable: DarwinBoolean = false
-        let status = AudioObjectIsPropertySettable(device.runtimeID, &property, &settable)
+        let status = AudioObjectIsPropertySettable(runtimeID, &property, &settable)
         return OutputVolume(scalar: min(1, max(0, scalar)), writable: status == noErr && settable.boolValue)
     }
 
     /// Explicit user command; device volume is shared with system audio and other clients.
     public static func setOutputVolume(uid: String, scalar: Float) throws -> Float {
+        let runtimeID = try resolveUID(uid)
         guard scalar.isFinite, (0...1).contains(scalar),
-              let device = try snapshot().devices.first(where: { $0.uid == uid }), device.alive == true,
-              try string(device.runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
+              try self.scalar(runtimeID, kAudioDevicePropertyDeviceIsAlive, initial: UInt32(0)) == 1,
+              try string(runtimeID, kAudioDevicePropertyDeviceUID) == uid else {
             throw ProbeError.invalid("Selected output device is unavailable, identity changed, or the volume value is invalid.")
         }
         var property = address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput)
         var settable: DarwinBoolean = false
-        guard AudioObjectHasProperty(device.runtimeID, &property),
-              AudioObjectIsPropertySettable(device.runtimeID, &property, &settable) == noErr,
+        guard AudioObjectHasProperty(runtimeID, &property),
+              AudioObjectIsPropertySettable(runtimeID, &property, &settable) == noErr,
               settable.boolValue else {
             throw ProbeError.invalid("Selected output does not expose a writable master volume control.")
         }
         var requested = scalar
-        try check(AudioObjectSetPropertyData(device.runtimeID, &property, 0, nil, UInt32(MemoryLayout<Float>.size), &requested), device.runtimeID, property.mSelector)
-        return try scalarValue(device.runtimeID, property.mSelector, scope: property.mScope)
+        try check(AudioObjectSetPropertyData(runtimeID, &property, 0, nil, UInt32(MemoryLayout<Float>.size), &requested), runtimeID, property.mSelector)
+        return try scalarValue(runtimeID, property.mSelector, scope: property.mScope)
     }
 
     public static func rateIsSettable(_ id: UInt32) -> Bool {
@@ -91,14 +93,14 @@ public enum CoreAudioCatalog {
     }
     /// Runtime monitoring still enumerates identities (including duplicate UIDs),
     /// but only probes capabilities for the explicitly selected endpoints.
-    public static func snapshot(selectedUIDs: Set<String>? = nil) throws -> CatalogSnapshot {
+    public static func snapshot(selectedUIDs: Set<String>? = nil, runtimeOnly: Bool = false) throws -> CatalogSnapshot {
         let ids: [UInt32] = try values(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
         var devices: [DeviceFacts] = []
         var issues: [String] = []
         for id in ids {
             do {
                 if let selectedUIDs, !selectedUIDs.contains(try string(id, kAudioDevicePropertyDeviceUID)) { continue }
-                devices.append(try device(id))
+                devices.append(try device(id, runtimeOnly: runtimeOnly))
             }
             catch { issues.append("Device \(id): \(error)") }
         }
@@ -110,32 +112,38 @@ public enum CoreAudioCatalog {
             .sorted { ($0.name, $0.uid) < ($1.name, $1.uid) }, issues: issues)
     }
 
-    private static func device(_ id: UInt32) throws -> DeviceFacts {
+    private static func resolveUID(_ uid: String) throws -> UInt32 {
+        let ids: [UInt32] = try values(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
+        let matches = ids.filter { (try? string($0, kAudioDevicePropertyDeviceUID)) == uid }
+        guard !uid.isEmpty, matches.count == 1, let id = matches.first else { throw ProbeError.invalid("Selected device UID is missing or ambiguous.") }
+        return id
+    }
+    private static func device(_ id: UInt32, runtimeOnly: Bool = false) throws -> DeviceFacts {
         let uid = try string(id, kAudioDevicePropertyDeviceUID)
         guard !uid.isEmpty else { throw ProbeError.invalid("Empty device UID") }
         var issues: [String] = []
         func read<T>(_ label: String, _ body: () throws -> T) -> T? {
             do { return try body() } catch { issues.append("\(label): \(error)"); return nil }
         }
-        let name = read("name") { try string(id, kAudioObjectPropertyName) } ?? "Unnamed device (\(id))"
-        let transport = read("transport") { fourCC(try scalar(id, kAudioDevicePropertyTransportType, initial: UInt32(0))) }
+        let name = runtimeOnly ? "" : read("name") { try string(id, kAudioObjectPropertyName) } ?? "Unnamed device (\(id))"
+        let transport = runtimeOnly ? nil : read("transport") { fourCC(try scalar(id, kAudioDevicePropertyTransportType, initial: UInt32(0))) }
         let alive = read("alive") { try scalar(id, kAudioDevicePropertyDeviceIsAlive, initial: UInt32(0)) == 1 }
         let rate = read("nominal sample rate") { try scalar(id, kAudioDevicePropertyNominalSampleRate, initial: Float64(0)) }
-        let rates: [ValueRange] = read("available sample rates") {
+        let rates: [ValueRange] = runtimeOnly ? [] : read("available sample rates") {
             let ranges: [AudioValueRange] = try values(id, kAudioDevicePropertyAvailableNominalSampleRates)
             return ranges.map(range)
         } ?? []
         let frames = read("buffer frames") { try scalar(id, kAudioDevicePropertyBufferFrameSize, initial: UInt32(0)) }
-        let frameRange = read("buffer range") { range(try scalar(id, kAudioDevicePropertyBufferFrameSizeRange, initial: AudioValueRange())) }
-        let clock = read("clock domain") { try scalar(id, kAudioDevicePropertyClockDomain, initial: UInt32(0)) }
-        let input = direction(id, scope: kAudioObjectPropertyScopeInput, issues: &issues)
-        let output = direction(id, scope: kAudioObjectPropertyScopeOutput, issues: &issues)
-        return DeviceFacts(runtimeID: id, uid: uid, name: name, transport: transport, iconURL: iconURL(id), alive: alive,
+        let frameRange = runtimeOnly ? nil : read("buffer range") { range(try scalar(id, kAudioDevicePropertyBufferFrameSizeRange, initial: AudioValueRange())) }
+        let clock = runtimeOnly ? nil : read("clock domain") { try scalar(id, kAudioDevicePropertyClockDomain, initial: UInt32(0)) }
+        let input = direction(id, scope: kAudioObjectPropertyScopeInput, issues: &issues, runtimeOnly: runtimeOnly)
+        let output = direction(id, scope: kAudioObjectPropertyScopeOutput, issues: &issues, runtimeOnly: runtimeOnly)
+        return DeviceFacts(runtimeID: id, uid: uid, name: name, transport: transport, iconURL: runtimeOnly ? nil : iconURL(id), alive: alive,
             nominalSampleRate: rate, availableSampleRates: rates, bufferFrames: frames,
             bufferFrameRange: frameRange, clockDomain: clock, input: input, output: output, issues: issues)
     }
 
-    private static func direction(_ id: UInt32, scope: UInt32, issues: inout [String]) -> DirectionFacts {
+    private static func direction(_ id: UInt32, scope: UInt32, issues: inout [String], runtimeOnly: Bool = false) -> DirectionFacts {
         let label = scope == kAudioObjectPropertyScopeInput ? "input" : "output"
         func read<T>(_ property: String, _ body: () throws -> T) -> T? {
             do { return try body() } catch { issues.append("\(label) \(property): \(error)"); return nil }
@@ -181,11 +189,11 @@ public enum CoreAudioCatalog {
             let start = streamRead("starting channel") { try scalar(streamID, kAudioStreamPropertyStartingChannel, initial: UInt32(0)) }
             let virtual = streamRead("virtual format") { format(try scalar(streamID, kAudioStreamPropertyVirtualFormat, initial: AudioStreamBasicDescription())) }
             let physical = streamRead("physical format") { format(try scalar(streamID, kAudioStreamPropertyPhysicalFormat, initial: AudioStreamBasicDescription())) }
-            let virtualFormats: [RangedStreamFormat] = streamRead("available virtual formats") {
+            let virtualFormats: [RangedStreamFormat] = runtimeOnly ? [] : streamRead("available virtual formats") {
                 let list: [AudioStreamRangedDescription] = try values(streamID, kAudioStreamPropertyAvailableVirtualFormats)
                 return list.map { RangedStreamFormat(format: format($0.mFormat), sampleRates: range($0.mSampleRateRange)) }
             } ?? []
-            let physicalFormats: [RangedStreamFormat] = streamRead("available physical formats") {
+            let physicalFormats: [RangedStreamFormat] = runtimeOnly ? [] : streamRead("available physical formats") {
                 let list: [AudioStreamRangedDescription] = try values(streamID, kAudioStreamPropertyAvailablePhysicalFormats)
                 return list.map { RangedStreamFormat(format: format($0.mFormat), sampleRates: range($0.mSampleRateRange)) }
             } ?? []

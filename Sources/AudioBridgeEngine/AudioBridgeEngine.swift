@@ -59,6 +59,7 @@ public struct EngineSnapshot: Sendable {
     public let auSchedulingStatus: Int32?
     public let auWorkgroupStatus: Int32?
     public let auWorkgroupIntervalFailures: UInt64
+    public let auWorkerCycle: ABAUWorkerCycleMetrics
     public let auStages: [AUStageTiming]
     public let auStarvation: ABAUStarvationMetrics?
     public let delayInputDevice: DeviceFacts
@@ -109,7 +110,17 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private var lastOutputActivity: Double?
     private var auHost: AUHostContext?
     private let preparationLock = NSLock()
-    private var preparationCancelled = false
+    private final class StartAttempt: @unchecked Sendable {
+        let gate: OpaquePointer
+        init?() { guard let gate = ABStartGateCreate() else { return nil }; self.gate = gate }
+        deinit { ABStartGateRelease(gate) }
+        var cancelled: Bool { ABStartGateCancelled(gate) }
+        func cancel() { ABStartGateCancel(gate) }
+    }
+    // Protected only while publishing/cancelling attempts, never across HAL.
+    private var startAttempts: [StartAttempt] = []
+    // Lifecycle queue only; the engine independently retains the C gate.
+    private var activeStartAttempt: StartAttempt?
     private var queueLowFrames: UInt64?
     private var queueHighFrames: UInt64?
     private var activeSelection = RouteSelection()
@@ -122,10 +133,12 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                       bufferFrames: UInt32? = nil, auFrames: UInt32? = nil, inputTrim: Double = 0, outputGain: Double = 0, effects: AUChain = AUChain(), chainBypass: Bool = false, effectsProcessingEnabled: Bool = true, exclusiveAccess: Bool = false,
                       updated: @escaping @Sendable (EngineSnapshot) -> Void,
                       completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        preparationLock.lock(); preparationCancelled = false; preparationLock.unlock()
+        guard let attempt = StartAttempt() else { completion(.failure(AUError("Unable to allocate start cancellation gate."))); return }
+        preparationLock.lock(); startAttempts.append(attempt); preparationLock.unlock()
         queue.async { [self] in
             var failureKind = BridgeFailureKind.actionRequired
             do {
+                guard !attempt.cancelled else { throw AUError("AU preparation cancelled.") }
                 guard context == nil else { throw Phase2Plan.PlanError("The previous engine has not fully stopped. Stop it before starting again.") }
                 // Fresh UID resolution and format validation; never use UI runtime IDs or defaults.
                 failureKind = .recoverable
@@ -141,6 +154,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     throw Phase2Plan.PlanError("Unable to allocate callback buffers or lock-free counters.")
                 }
                 context = created; plan = next; activeSelection = selection
+                activeStartAttempt = attempt
+                guard ABEngineAttachStartGate(created, attempt.gate) else { throw AUError("Unable to attach start cancellation gate.") }
                 ABEngineSetExclusiveAccessRequested(created, exclusiveAccess)
                 delayInputDevice = next.input.device; delayOutputDevice = next.output.device
                 let routing = try Self.makeRouting(next, selection: selection)
@@ -152,12 +167,13 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                     // prepares no plugin; the saved chain can be loaded later
                     // while dry blocks continue through the same queues.
                     auHost = try AUHostContext(chain: effectsProcessingEnabled ? effects : AUChain(), plan: next, bypass: chainBypass,
-                        effectsProcessingEnabled: effectsProcessingEnabled, cancelled: { [self] in
-                        self.preparationLock.lock(); defer { self.preparationLock.unlock() }; return self.preparationCancelled
+                        effectsProcessingEnabled: effectsProcessingEnabled, cancelled: {
+                        attempt.cancelled
                     })
                     guard ABEngineAttachAU(created, auHost?.transport) else { throw AUError("Unable to attach AU shared buffers.") }
                 }
                 ABEngineInitialGains(created, GainSettings.amplitude(decibels: inputTrim), GainSettings.amplitude(decibels: outputGain), UInt32(min(65536, max(1, next.sampleRate * 0.02))))
+                guard !attempt.cancelled else { throw AUError("AU preparation cancelled.") }
                 let status = ABEngineStart(created)
                 guard status == 0 else {
                     let exclusiveFailureDevice = ABEngineExclusiveFailureDevice(created)
@@ -185,6 +201,8 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 timer.resume()
                 completion(.success(()))
             } catch {
+                attempt.cancel()
+                preparationLock.lock(); startAttempts.removeAll { $0.cancelled }; preparationLock.unlock()
                 let cleanup = stopOnQueue()
                 completion(.failure(BridgeFailure(error.localizedDescription + (cleanup.map { " \($0)" } ?? ""),
                     kind: context == nil ? ((error as? BridgeFailure)?.kind ?? failureKind) : .unsafeTeardown)))
@@ -192,7 +210,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         }
     }
     public func stop(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
-        preparationLock.lock(); preparationCancelled = true; preparationLock.unlock()
+        preparationLock.lock(); startAttempts.forEach { $0.cancel() }; startAttempts.removeAll(); preparationLock.unlock()
         queue.async { [self] in
             if let error = stopOnQueue() { completion(.failure(BridgeFailure(error, kind: context == nil ? .actionRequired : .unsafeTeardown))) }
             else { completion(.success(())) }
@@ -267,6 +285,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     private func poll(updated: @escaping @Sendable (EngineSnapshot) -> Void) {
         guard let context, let plan else { return }
         let metrics = ABEngineMetrics(context)
+        let auMetrics = auHost?.metrics
         let now = ProcessInfo.processInfo.systemUptime
         let elapsed = (now - startedAt)
         if metrics.inputCallbacks > previousInputCallbacks { lastInputActivity = now }
@@ -278,7 +297,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
         previousInputCallbacks = metrics.inputCallbacks; previousOutputCallbacks = metrics.outputCallbacks
         var fault: String?
         var faultKind = BridgeFailureKind.recoverable
-        if let auFault = auHost?.fault() { fault = auFault.message; faultKind = auFault.kind }
+        if let auFault = auHost?.fault(metrics: auMetrics) { fault = auFault.message; faultKind = auFault.kind }
         if fault == nil, metrics.formatFaults > 0 {
             fault = "Audio buffer layout changed or became invalid. Refresh devices and start again."
             faultKind = metrics.layoutFaults > 0 ? .deviceLost : .actionRequired
@@ -292,14 +311,14 @@ public final class AudioBridgeEngine: @unchecked Sendable {
                 metrics.primed ? nil : "processed startup buffer"
             ].compactMap { $0 }.joined(separator: ", ")
             if !inputActive || !outputActive { faultKind = .deviceLost }
-            fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auHost?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
+            fault = "No confirmed \(missing). Input callbacks: \(metrics.inputCallbacks), output callbacks: \(metrics.outputCallbacks), captured: \(metrics.inputFrames), AU processed: \(auMetrics?.processedFrames ?? 0), queued: \(metrics.bufferedFrames)/\(plan.prefill + ABResamplerLookahead()) frames. Check selected devices and microphone permission."
         }
         // Recheck UID, liveness and stream formats on the lifecycle queue, never in a callback.
         // Stop/latch on change; only explicit local re-arm may reuse these UIDs.
         if (now - lastDeviceCheck) >= 0.5 {
           lastDeviceCheck = now
           do {
-            let fresh = try CoreAudioCatalog.snapshot(selectedUIDs: [plan.input.device.uid, plan.output.device.uid])
+            let fresh = try CoreAudioCatalog.snapshot(selectedUIDs: [plan.input.device.uid, plan.output.device.uid], runtimeOnly: true)
             let input = fresh.devices.first { $0.uid == plan.input.device.uid }
             let output = fresh.devices.first { $0.uid == plan.output.device.uid }
             if input?.alive != true || output?.alive != true
@@ -322,7 +341,6 @@ public final class AudioBridgeEngine: @unchecked Sendable {
               if fault == nil { fault = "Device recheck failed: \(error.localizedDescription)" }
           }
         }
-        let auMetrics = auHost?.metrics
         let auLatency = auMetrics?.latencySeconds ?? 0
         let auFrames = auMetrics?.processedFrames ?? 0
         // Independently sampled queues: occupancy estimate, not a tagged-sample
@@ -402,6 +420,7 @@ public final class AudioBridgeEngine: @unchecked Sendable {
             auSchedulingStatus: auMetrics?.schedulingStatus,
             auWorkgroupStatus: auMetrics?.workgroupStatus,
             auWorkgroupIntervalFailures: auMetrics?.workgroupIntervalFailures ?? 0,
+            auWorkerCycle: auMetrics?.cycle ?? ABAUWorkerCycleMetrics(),
             auStages: stageTimings, auStarvation: starvation,
             delayInputDevice: delayInputDevice ?? plan.input.device, delayOutputDevice: delayOutputDevice ?? plan.output.device, delaySelection: activeSelection,
             chainBypassed: auMetrics?.bypassed ?? false,
@@ -413,6 +432,11 @@ public final class AudioBridgeEngine: @unchecked Sendable {
     }
     private func stopOnQueue() -> String? {
         watchdog?.setEventHandler {}; watchdog?.cancel(); watchdog = nil
+        if let retired = activeStartAttempt {
+            retired.cancel()
+            preparationLock.lock(); startAttempts.removeAll { $0 === retired }; preparationLock.unlock()
+            activeStartAttempt = nil
+        }
         guard let context else { return nil }
         let status = ABEngineStop(context)
         if ABEngineDestroy(context) { self.context = nil; plan = nil }

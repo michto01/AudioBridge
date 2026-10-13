@@ -78,7 +78,7 @@ final class PullSource {
             if let destination = buffers[lane].mData {
                 // Some units retain a previously supplied source pointer.
                 // Overlapping source/destination is legal in that case.
-                memmove(destination, source, bytes)
+                if destination != UnsafeMutableRawPointer(source) { memmove(destination, source, bytes) }
             } else { buffers[lane].mData = UnsafeMutableRawPointer(source) }
             buffers[lane].mNumberChannels = 1; buffers[lane].mDataByteSize = UInt32(bytes)
         }
@@ -230,7 +230,8 @@ final class Renderer: @unchecked Sendable {
                 for lane in 0..<2 {
                     guard list[lane].mNumberChannels == 1, list[lane].mDataByteSize == bytes,
                           let rendered = list[lane].mData else { fail(kAudioUnitErr_FormatNotSupported); return false }
-                    memmove(output.advanced(by: lane * count), rendered, Int(bytes))
+                    let destination = output.advanced(by: lane * count)
+                    if UnsafeMutableRawPointer(destination) != rendered { memmove(destination, rendered, Int(bytes)) }
                 }
                 swap(&input, &output)
             }

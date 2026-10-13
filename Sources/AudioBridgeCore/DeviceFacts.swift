@@ -76,14 +76,13 @@ public struct DirectionFacts: Codable, Equatable, Sendable {
     public let streams: [StreamFacts]
     public let latencyFrames: UInt32?
     public let safetyOffsetFrames: UInt32?
-    /// Reported latency can change without invalidating callback topology.
+    /// Latency and available capability lists do not change the active callback topology.
     public func matchesRoutingTopology(_ other: DirectionFacts) -> Bool {
         channelCount == other.channelCount && bufferChannelCounts == other.bufferChannelCounts
             && preferredLayoutTag == other.preferredLayoutTag && channelLabels == other.channelLabels
             && streams.count == other.streams.count && zip(streams, other.streams).allSatisfy { a, b in
                 a.runtimeID == b.runtimeID && a.startingChannel == b.startingChannel
                     && a.virtualFormat == b.virtualFormat && a.physicalFormat == b.physicalFormat
-                    && a.availableVirtualFormats == b.availableVirtualFormats && a.availablePhysicalFormats == b.availablePhysicalFormats
             }
     }
     /// Stream starting indices can be non-contiguous (observed on an aggregate).

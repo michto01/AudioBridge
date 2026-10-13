@@ -95,13 +95,13 @@ final class AUHostContext {
             response = reply; self.pending = nil
         }
     }
-    func fault() -> BridgeFailure? {
+    func fault(metrics: ABAUTransportMetrics?) -> BridgeFailure? {
         pollResponse()
         if let pending, pending.edit == nil, ProcessInfo.processInfo.systemUptime - pendingSince > 30 {
             return BridgeFailure("Live AU update timed out; routing stopped without bypassing the requested chain.", kind: .actionRequired)
         }
         guard let transport else { return BridgeFailure("AU shared memory is unavailable.", kind: .actionRequired) }
-        let facts = ABAUTransportSnapshot(transport)
+        let facts = metrics ?? ABAUTransportSnapshot(transport)
         if facts.fault != 0 { return BridgeFailure("AU render failed (OSStatus \(facts.fault)); routing stopped without bypassing the chain.", kind: .actionRequired) }
         if !process.isRunning { return BridgeFailure("AU helper exited; routing stopped without bypassing the chain.", kind: .recoverable) }
         if facts.heartbeat != heartbeat { heartbeat = facts.heartbeat; lastHeartbeat = ProcessInfo.processInfo.systemUptime }

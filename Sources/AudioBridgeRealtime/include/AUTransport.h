@@ -18,6 +18,10 @@ ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *transport);
 bool ABAUTransportStopped(const ABAUTransport *transport);
 uint64_t ABAUTransportProcessedFrames(const ABAUTransport *transport);
 typedef struct {
+    uint64_t cycles, nanoseconds, lastNanoseconds, maximumNanoseconds, overBudget;
+    uint64_t adoptions, adoptionNanoseconds, maximumAdoptionNanoseconds;
+} ABAUWorkerCycleMetrics;
+typedef struct {
     uint64_t identity, blocks, nanoseconds, maximumNanoseconds, overBudget;
 } ABAUStageMetrics;
 typedef struct {
@@ -46,6 +50,7 @@ typedef struct {
     uint64_t workerWaits, workerLateWakeups, maxWorkerWakeLatenessNanoseconds;
     int32_t schedulingStatus, workgroupStatus;
     uint64_t workgroupIntervalFailures;
+    ABAUWorkerCycleMetrics cycle;
 } ABAUTransportMetrics;
 ABAUTransport *ABAUTransportCreate(const char *name, uint32_t capacity);
 const char *ABAUTransportLastError(void);
@@ -79,6 +84,9 @@ const void *ABAUTransportWorkgroup(const ABAUTransport *transport);
 // Deterministic accounting entry points allow tests without sleeping/plugins.
 void ABAUTransportRecordWorkerWait(ABAUTransport *transport, uint64_t requestedNanoseconds, uint64_t elapsedNanoseconds);
 void ABAUTransportRecordRenderDuration(ABAUTransport *transport, uint64_t durationNanoseconds);
+uint64_t ABAUTransportClock(void);
+void ABAUTransportRecordCycleTicks(ABAUTransport *transport, uint64_t start, uint64_t adoptionTicks, bool adopted);
+void ABAUTransportRecordCycleDuration(ABAUTransport *transport, uint64_t durationNanoseconds, uint64_t adoptionNanoseconds, bool adopted);
 uint32_t ABAUCaptureWrite(ABAUTransport *transport, const float *samples, uint32_t frames);
 uint32_t ABAUOutputRead(ABAUTransport *transport, float *samples, uint32_t frames);
 uint32_t ABAUWorkerRead(ABAUTransport *transport, float *samples, uint32_t frames);

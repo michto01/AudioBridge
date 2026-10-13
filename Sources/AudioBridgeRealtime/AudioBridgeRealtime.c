@@ -93,6 +93,7 @@ struct ABEngine {
     AudioDeviceID inputDevice, outputDevice;
     AudioDeviceIOProcID inputProc, outputProc;
     ABRouting *routing;
+    ABStartGate *startGate;
     ABRing *ring;
     float *inputScratch, *outputScratch;
     uint32_t scratchFrames, prefill;
@@ -233,7 +234,7 @@ static OSStatus input_callback(AudioObjectID device, const AudioTimeStamp *now,
     (void)device; (void)now; (void)output; (void)outputTime;
     ABEngine *engine = context;
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
-    if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
+    if (atomic_load_explicit(&engine->enabled, memory_order_acquire) && !ABStartGateCancelled(engine->startGate)) {
         uint32_t frames;
         record_clock_rate(engine, inputTime, true);
         atomic_fetch_add_explicit(&engine->inputCallbacks, 1, memory_order_relaxed);
@@ -265,7 +266,7 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
     ABEngine *engine = context;
     atomic_fetch_add_explicit(&engine->inFlight, 1, memory_order_acquire);
     // HAL supplies zeroed output buffers (AudioHardware.h). Unselected lanes remain untouched.
-    if (atomic_load_explicit(&engine->enabled, memory_order_acquire)) {
+    if (atomic_load_explicit(&engine->enabled, memory_order_acquire) && !ABStartGateCancelled(engine->startGate)) {
         record_clock_rate(engine, outputTime, false);
         atomic_fetch_add_explicit(&engine->outputCallbacks, 1, memory_order_relaxed);
         uint32_t frames;
@@ -277,7 +278,8 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
             // Reserve is left AFTER rendering a callback; FIR demand includes retained history.
             engine->driftTarget = engine->prefill + frames + engine->inputBuffer * 0.5;
             double ratio = 1 + engine->drift.ppm * 0.000001;
-            uint32_t needed = ABResamplerInputNeeded(engine->resampler, frames, ratio);
+            ABResamplerPlan demand = ABResamplerPrepare(engine->resampler, frames, ratio);
+            uint32_t needed = demand.needed;
             atomic_store_explicit(&engine->refillThresholdFrames, engine->prefill + needed, memory_order_relaxed);
             atomic_store_explicit(&engine->appliedDriftPPMBits, 0, memory_order_relaxed);
             if (!atomic_load_explicit(&engine->primed, memory_order_relaxed)
@@ -310,13 +312,18 @@ static OSStatus output_callback(AudioObjectID device, const AudioTimeStamp *now,
                 }
                 // A positive correction can need one extra source frame. Prefer a complete
                 // unity callback to avoidable starvation; retain the bounded PI command.
-                if (ratio > 1 && ABResamplerInputNeeded(engine->resampler, frames, ratio) > queued.outputFrames
-                    && ABResamplerInputNeeded(engine->resampler, frames, 1) <= queued.outputFrames) {
-                    ratio = 1;
-                    atomic_fetch_add_explicit(&engine->driftLimitedCallbacks, 1, memory_order_relaxed);
+                if (!ABResamplerPlanValid(engine->resampler, &demand) || demand.ratio != ratio)
+                    demand = ABResamplerPrepare(engine->resampler, frames, ratio);
+                if (ratio > 1 && demand.needed > queued.outputFrames) {
+                    ABResamplerPlan unity = ABResamplerPrepare(engine->resampler, frames, 1);
+                    if (unity.needed <= queued.outputFrames) {
+                        ratio = 1; demand = unity;
+                        atomic_fetch_add_explicit(&engine->driftLimitedCallbacks, 1, memory_order_relaxed);
+                    }
                 }
+
                 atomic_store_explicit(&engine->appliedDriftPPMBits, float_bits((float)((ratio - 1) * 1e6)), memory_order_relaxed);
-                uint32_t read = ABResamplerProcess(engine->resampler, source_read, engine, engine->outputScratch, frames, ratio);
+                uint32_t read = ABResamplerProcessPrepared(engine->resampler, source_read, engine, engine->outputScratch, &demand);
                 apply_gain(engine->outputScratch, frames, &engine->outputGain,
                     bits_float(atomic_load_explicit(&engine->outputGainTarget, memory_order_relaxed)), engine->rampFrames, engine);
                 uint64_t faults = 0, clips = 0; float peak = 0;
@@ -398,7 +405,12 @@ ABEngine *ABEngineCreate(AudioDeviceID input, AudioDeviceID output, uint32_t cap
     }
     return engine;
 }
+bool ABEngineAttachStartGate(ABEngine *engine, ABStartGate *gate) {
+    if (!engine || !gate || engine->startGate || engine->inputProc || engine->outputProc) return false;
+    ABStartGateRetain(gate); engine->startGate = gate; return true;
+}
 OSStatus ABEngineStart(ABEngine *engine) {
+    if (!engine || ABStartGateCancelled(engine->startGate)) return kAudioHardwareIllegalOperationError;
     if (!engine || !engine->routing || engine->inputProc || engine->outputProc) return kAudioHardwareIllegalOperationError;
     OSStatus status = noErr;
     engine->exclusiveFailureDevice = 0;
@@ -451,9 +463,11 @@ OSStatus ABEngineStart(ABEngine *engine) {
     atomic_store_explicit(&engine->enabled, true, memory_order_release);
     // Output can wait silently for priming. Starting capture first lets a
     // slow output-device startup fill/overflow queues before any consumption.
+    if (ABStartGateCancelled(engine->startGate)) return kAudioHardwareIllegalOperationError;
     status = AudioDeviceStart(engine->outputDevice, engine->outputProc);
     if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
     engine->outputStarted = true;
+    if (ABStartGateCancelled(engine->startGate)) return kAudioHardwareIllegalOperationError;
     status = AudioDeviceStart(engine->inputDevice, engine->inputProc);
     if (status != noErr) { atomic_store_explicit(&engine->enabled, false, memory_order_release); return status; }
     engine->inputStarted = true;
@@ -521,7 +535,7 @@ bool ABEngineDestroy(ABEngine *engine) {
     if (engine->inputProc || engine->outputProc || engine->inputHogHeld || engine->outputHogHeld
         || atomic_load_explicit(&engine->inFlight, memory_order_acquire))
         return false; // Keep callbacks context alive on failed unregister/teardown.
-    ABRingDestroy(engine->ring); ABResamplerDestroy(engine->resampler); ABRoutingDestroy(engine->routing); free(engine->inputScratch); free(engine->outputScratch); free(engine);
+    ABStartGateRelease(engine->startGate); ABRingDestroy(engine->ring); ABResamplerDestroy(engine->resampler); ABRoutingDestroy(engine->routing); free(engine->inputScratch); free(engine->outputScratch); free(engine);
     return true;
 }
 ABMetrics ABEngineMetrics(const ABEngine *engine) {
@@ -531,7 +545,7 @@ ABMetrics ABEngineMetrics(const ABEngine *engine) {
     AB_LOAD(inputCallbacks); AB_LOAD(outputCallbacks); AB_LOAD(inputFrames); AB_LOAD(outputFrames);
     AB_LOAD(underrunFrames); AB_LOAD(overrunFrames); AB_LOAD(formatFaults); AB_LOAD(layoutFaults); AB_LOAD(primed);
 #undef AB_LOAD
-    result.bufferedFrames = engine->au ? ABAUTransportSnapshot(engine->au).outputFrames : ABRingAvailable(engine->ring);
+    result.bufferedFrames = engine->au ? ABAUTransportQueues(engine->au).outputFrames : ABRingAvailable(engine->ring);
     result.inputLevels.peak1 = bits_float(atomic_load_explicit(&engine->inputPeak1, memory_order_relaxed));
     result.inputLevels.peak2 = bits_float(atomic_load_explicit(&engine->inputPeak2, memory_order_relaxed));
     result.outputLevels.peak1 = bits_float(atomic_load_explicit(&engine->outputPeak1, memory_order_relaxed));

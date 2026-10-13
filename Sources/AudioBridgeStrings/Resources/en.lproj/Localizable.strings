@@ -437,3 +437,8 @@
 "Search effects or manufacturers…" = "Search effects or manufacturers…";
 "Clear search" = "Clear search";
 "No matching effects" = "No matching effects";
+"Complete worker cycle · mean run" = "Complete worker cycle · mean run";
+"Complete worker cycle · maximum run" = "Complete worker cycle · maximum run";
+"Worker cycles over budget · run" = "Worker cycles over budget · run";
+"Chain adoption · maximum run" = "Chain adoption · maximum run";
+"\n\nComplete worker-cycle time includes chain adoption, render-context hooks and autorelease-pool cleanup after processing; it excludes idle waits. It is not signal latency. Cycle and adoption values are run totals and are not cleared by Reset counters." = "\n\nComplete worker-cycle time includes chain adoption, render-context hooks and autorelease-pool cleanup after processing; it excludes idle waits. It is not signal latency. Cycle and adoption values are run totals and are not cleared by Reset counters.";

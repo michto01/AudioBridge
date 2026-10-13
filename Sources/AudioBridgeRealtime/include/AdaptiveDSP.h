@@ -8,6 +8,12 @@ void ABDriftReanchor(ABDriftController *controller, double target);
 // Hold only when processed delivery is low while conserved backlog is excessive.
 bool ABDriftShouldHold(double pending, double target, uint32_t processed, uint32_t needed, uint32_t reserve);
 typedef struct ABResampler ABResampler;
+typedef struct {
+    const ABResampler *owner;
+    uint64_t generation;
+    uint32_t frames, needed;
+    double ratio;
+} ABResamplerPlan;
 typedef uint32_t (*ABReadStereo)(void *context, float *samples, uint32_t frames);
 ABResampler *ABResamplerCreate(void);
 void ABResamplerDestroy(ABResampler *resampler);
@@ -17,5 +23,8 @@ bool ABResamplerStarved(const ABResampler *resampler);
 // Exact input demand for the next call, including partial priming/history.
 // UINT32_MAX for invalid arguments; history survives a temporary short read.
 uint32_t ABResamplerInputNeeded(const ABResampler *resampler, uint32_t frames, double ratio);
+ABResamplerPlan ABResamplerPrepare(const ABResampler *resampler, uint32_t frames, double ratio);
+bool ABResamplerPlanValid(const ABResampler *resampler, const ABResamplerPlan *plan);
+uint32_t ABResamplerProcessPrepared(ABResampler *resampler, ABReadStereo read, void *context, float *output, const ABResamplerPlan *plan);
 uint32_t ABResamplerProcess(ABResampler *resampler, ABReadStereo read, void *context, float *output, uint32_t frames, double ratio);
 #endif

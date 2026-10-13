@@ -8,14 +8,19 @@
 typedef struct {
     ABChannelAddress *addresses;
     uint32_t *buffers, count, bufferCount;
-    _Atomic uint32_t *targets, version;
+    _Atomic uint32_t *targets;
+    _Atomic uint64_t version;
+    uint64_t appliedVersion;
+    bool hasVersion;
+    bool needsPrune;
+    uint32_t *active, activeCount;
     float *snapshot;
     ABGainRamp *ramps;
 } Direction;
 struct ABRouting { Direction input, output; };
 static uint32_t bits(float f) { uint32_t v; memcpy(&v, &f, sizeof v); return v; }
 static float value(uint32_t v) { float f; memcpy(&f, &v, sizeof f); return f; }
-static void dispose(Direction *d) { free(d->addresses); free(d->buffers); free(d->targets); free(d->snapshot); free(d->ramps); }
+static void dispose(Direction *d) { free(d->addresses); free(d->buffers); free(d->targets); free(d->snapshot); free(d->ramps); free(d->active); }
 static bool prepare(Direction *d, const ABChannelAddress *a, uint32_t n, const uint32_t *b, uint32_t nb) {
     if (!a || !b || !n || n > 4096 || !nb || nb > 4096) return false;
     for (uint32_t i = 0; i < nb; i++) if (!b[i] || b[i] > 4096) return false;
@@ -27,7 +32,8 @@ static bool prepare(Direction *d, const ABChannelAddress *a, uint32_t n, const u
     d->addresses = malloc(n * sizeof(*a)); d->buffers = malloc(nb * sizeof(*b));
     d->targets = calloc(n * 2, sizeof(*d->targets));
     d->snapshot = calloc(n * 2, sizeof(float)); d->ramps = calloc(n * 2, sizeof(ABGainRamp));
-    if (!d->addresses || !d->buffers || !d->targets || !d->snapshot || !d->ramps) return false;
+    d->active = malloc(n * sizeof(uint32_t));
+    if (!d->addresses || !d->active || !d->buffers || !d->targets || !d->snapshot || !d->ramps) return false;
     memcpy(d->addresses, a, n * sizeof(*a)); memcpy(d->buffers, b, nb * sizeof(*b));
     atomic_init(&d->version, 0);
     for (uint32_t i = 0; i < n * 2; i++) atomic_init(&d->targets[i], 0);
@@ -39,7 +45,7 @@ static bool valid_gains(const Direction *d, const float *g, uint32_t n) {
     return true;
 }
 static bool update(Direction *d, const float *g, uint32_t n, bool initial) {
-    if (!valid_gains(d, g, n)) return false;
+    if (!valid_gains(d, g, n) || atomic_load_explicit(&d->version, memory_order_seq_cst) > UINT64_MAX - 2) return false;
     atomic_fetch_add_explicit(&d->version, 1, memory_order_seq_cst);
     for (uint32_t i = 0; i < n * 2; i++) atomic_store_explicit(&d->targets[i], bits(g[i]), memory_order_seq_cst);
     atomic_fetch_add_explicit(&d->version, 1, memory_order_seq_cst);
@@ -59,6 +65,9 @@ bool ABRoutingSetInput(ABRouting *r, const float *g, uint32_t n, bool initial) {
 bool ABRoutingSetOutput(ABRouting *r, const float *g, uint32_t n, bool initial) { return r && update(&r->output, g, n, initial); }
 bool ABRoutingSetBoth(ABRouting *r, const float *input, uint32_t ni, const float *output, uint32_t no, bool initial) {
     if (!r || !valid_gains(&r->input, input, ni) || !valid_gains(&r->output, output, no)) return false;
+    // Control updates have one writer. Reject exhaustion before publishing either direction.
+    if (atomic_load_explicit(&r->input.version, memory_order_seq_cst) > UINT64_MAX - 2
+        || atomic_load_explicit(&r->output.version, memory_order_seq_cst) > UINT64_MAX - 2) return false;
     return update(&r->input, input, ni, initial) && update(&r->output, output, no, initial);
 }
 bool ABRoutingFrames(const ABRouting *r, const AudioBufferList *abl, bool input, uint32_t *frames) {
@@ -77,11 +86,33 @@ bool ABRoutingFrames(const ABRouting *r, const AudioBufferList *abl, bool input,
     *frames = count; return count > 0;
 }
 static void snapshot(Direction *d, uint32_t ramp) {
-    uint32_t version = atomic_load_explicit(&d->version, memory_order_seq_cst);
-    if (version & 1) return;
+    uint64_t version = atomic_load_explicit(&d->version, memory_order_seq_cst);
+    if ((version & 1) || (d->hasVersion && version == d->appliedVersion)) return;
     for (uint32_t i = 0; i < d->count * 2; i++) d->snapshot[i] = value(atomic_load_explicit(&d->targets[i], memory_order_seq_cst));
     if (version != atomic_load_explicit(&d->version, memory_order_seq_cst)) return;
     for (uint32_t i = 0; i < d->count * 2; i++) if (d->snapshot[i] != d->ramps[i].target) ABGainRetarget(&d->ramps[i], d->snapshot[i], ramp);
+    d->appliedVersion = version; d->hasVersion = true; d->activeCount = 0; d->needsPrune = false;
+    for (uint32_t c = 0; c < d->count; c++) {
+        ABGainRamp l = d->ramps[c * 2], r = d->ramps[c * 2 + 1];
+        if (l.current != 0 || r.current != 0 || l.target != 0 || r.target != 0 || l.remaining || r.remaining) {
+            d->active[d->activeCount++] = c;
+            if (l.target == 0 && r.target == 0) d->needsPrune = true;
+        }
+    }
+}
+static void prune(Direction *d) {
+    if (!d->needsPrune) return;
+    d->needsPrune = false;
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < d->activeCount; i++) {
+        uint32_t c = d->active[i];
+        ABGainRamp l = d->ramps[c * 2], r = d->ramps[c * 2 + 1];
+        if (l.current != 0 || r.current != 0 || l.target != 0 || r.target != 0 || l.remaining || r.remaining) {
+            d->active[kept++] = c;
+            if (l.target == 0 && r.target == 0) d->needsPrune = true;
+        }
+    }
+    d->activeCount = kept;
 }
 void ABRoutingMix(ABRouting *r, const AudioBufferList *abl, float *out, uint32_t frames, uint32_t ramp,
                  uint64_t *faults, uint64_t *rawL, uint64_t *rawR) {
@@ -89,7 +120,8 @@ void ABRoutingMix(ABRouting *r, const AudioBufferList *abl, float *out, uint32_t
     memset(out, 0, (size_t)frames * 2 * sizeof(float));
     for (uint32_t f = 0; f < frames; f++) {
         double left = 0, right = 0;
-        for (uint32_t c = 0; c < d->count; c++) {
+        for (uint32_t i = 0; i < d->activeCount; i++) {
+            uint32_t c = d->active[i];
             float l = ABGainNext(&d->ramps[c * 2]), rr = ABGainNext(&d->ramps[c * 2 + 1]);
             if (l == 0 && rr == 0) continue;
             ABChannelAddress a = d->addresses[c]; float sample;
@@ -100,11 +132,14 @@ void ABRoutingMix(ABRouting *r, const AudioBufferList *abl, float *out, uint32_t
         }
         out[f * 2] = (float)left; out[f * 2 + 1] = (float)right;
     }
+    prune(d);
 }
 void ABRoutingFanout(ABRouting *r, const float *in, AudioBufferList *abl, uint32_t frames, uint32_t ramp,
                     uint64_t *faults, float *peak, uint64_t *clips) {
     Direction *d = &r->output; snapshot(d, ramp);
-    for (uint32_t f = 0; f < frames; f++) for (uint32_t c = 0; c < d->count; c++) {
+    for (uint32_t b = 0; b < d->bufferCount; b++) memset(abl->mBuffers[b].mData, 0, (size_t)frames * d->buffers[b] * sizeof(float));
+    for (uint32_t f = 0; f < frames; f++) for (uint32_t i = 0; i < d->activeCount; i++) {
+        uint32_t c = d->active[i];
         float l = ABGainNext(&d->ramps[c * 2]), rr = ABGainNext(&d->ramps[c * 2 + 1]);
         float sample = l * in[f * 2] + rr * in[f * 2 + 1];
         if (!isfinite(sample)) { sample = 0; (*faults)++; }
@@ -112,4 +147,5 @@ void ABRoutingFanout(ABRouting *r, const float *in, AudioBufferList *abl, uint32
         ABChannelAddress a = d->addresses[c];
         memcpy((char *)abl->mBuffers[a.buffer].mData + ((size_t)f * a.stride + a.offset) * sizeof(float), &sample, sizeof sample);
     }
+    prune(d);
 }

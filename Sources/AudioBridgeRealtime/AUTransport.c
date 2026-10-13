@@ -21,7 +21,7 @@ static void failure(const char *operation, int code) {
     snprintf(transport_error, sizeof(transport_error), "%s: %s (errno %d)", operation, strerror(code), code);
 }
 
-#define AB_SHARED_VERSION 7
+#define AB_SHARED_VERSION 8
 uint32_t ABAUTransportProtocolVersion(void) { return AB_SHARED_VERSION; }
 #define AB_SHARED_CAPACITY 65536
 typedef struct { _Atomic uint32_t write, read; float samples[AB_SHARED_CAPACITY * 2]; } SharedRing;
@@ -47,6 +47,8 @@ typedef struct {
     _Atomic uint64_t lossSequence, lostFrames, lossRender, lossWake;
     _Atomic uint32_t lossCapture, lossReady, lossInFlight;
     _Atomic int32_t lossStage;
+    _Atomic uint64_t cycleCount, cycleTotal, cycleLast, cycleMax, cycleOver;
+    _Atomic uint64_t adoptionCount, adoptionTotal, adoptionMax;
     SharedRing input, output;
 } Shared;
 struct ABAUTransport { Shared *shared; char name[32], eventName[32]; sem_t *event; bool owner; mach_timebase_info_data_t timebase;
@@ -57,7 +59,10 @@ struct ABAUTransport { Shared *shared; char name[32], eventName[32]; sem_t *even
 };
 
 static bool valid_atomics(Shared *s) {
-    return atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
+    return atomic_is_lock_free(&s->cycleCount) && atomic_is_lock_free(&s->cycleTotal)
+        && atomic_is_lock_free(&s->cycleLast) && atomic_is_lock_free(&s->cycleMax) && atomic_is_lock_free(&s->cycleOver)
+        && atomic_is_lock_free(&s->adoptionCount) && atomic_is_lock_free(&s->adoptionTotal) && atomic_is_lock_free(&s->adoptionMax)
+        && atomic_is_lock_free(&s->ready) && atomic_is_lock_free(&s->fault)
         && atomic_is_lock_free(&s->effectsProcessingEnabled)
         && atomic_is_lock_free(&s->latency) && atomic_is_lock_free(&s->heartbeat)
         && atomic_is_lock_free(&s->inFlightFrames) && atomic_is_lock_free(&s->renderBlocks)
@@ -90,6 +95,8 @@ static ABAUTransport *map_transport(const char *name, bool create, uint32_t capa
     if (s == MAP_FAILED) { failure("mmap", mapError); if (create) shm_unlink(name); return NULL; }
     if (create) {
         memset(s, 0, sizeof(*s)); s->version = AB_SHARED_VERSION; s->capacity = capacity;
+        atomic_init(&s->cycleCount, 0); atomic_init(&s->cycleTotal, 0); atomic_init(&s->cycleLast, 0); atomic_init(&s->cycleMax, 0); atomic_init(&s->cycleOver, 0);
+        atomic_init(&s->adoptionCount, 0); atomic_init(&s->adoptionTotal, 0); atomic_init(&s->adoptionMax, 0);
         atomic_init(&s->ready, false); atomic_init(&s->stopped, false); atomic_init(&s->fault, 0);
         atomic_init(&s->bypass, false); atomic_init(&s->latencyChanged, false);
         atomic_init(&s->effectsProcessingEnabled, true);
@@ -290,6 +297,11 @@ ABAUQueueMetrics ABAUTransportQueues(const ABAUTransport *t) {
 }
 ABAUTransportMetrics ABAUTransportSnapshot(const ABAUTransport *t) {
     const Shared *s = t->shared; ABAUTransportMetrics result = {0};
+    result.cycle = (ABAUWorkerCycleMetrics){
+        atomic_load_explicit(&s->cycleCount, memory_order_relaxed), atomic_load_explicit(&s->cycleTotal, memory_order_relaxed),
+        atomic_load_explicit(&s->cycleLast, memory_order_relaxed), atomic_load_explicit(&s->cycleMax, memory_order_relaxed),
+        atomic_load_explicit(&s->cycleOver, memory_order_relaxed), atomic_load_explicit(&s->adoptionCount, memory_order_relaxed),
+        atomic_load_explicit(&s->adoptionTotal, memory_order_relaxed), atomic_load_explicit(&s->adoptionMax, memory_order_relaxed) };
     result.workgroupStatus = atomic_load_explicit(&s->workgroupStatus, memory_order_acquire);
     result.workgroupIntervalFailures = atomic_load_explicit(&s->workgroupIntervalFailures, memory_order_relaxed);
     result.ready = atomic_load_explicit(&s->ready, memory_order_acquire);
@@ -443,4 +455,25 @@ void ABAUTransportFinishRealtimeThread(ABAUTransport *t) {
     if (t->joined) os_workgroup_leave((os_workgroup_t)t->workgroup, &t->joinToken);
     if (t->workgroup) os_release(t->workgroup);
     t->intervalActive = false; t->joined = false; t->workgroup = NULL;
+}
+
+uint64_t ABAUTransportClock(void) { return mach_absolute_time(); }
+void ABAUTransportRecordCycleTicks(ABAUTransport *t, uint64_t start, uint64_t adoptionTicks, bool adopted) {
+    uint64_t now = mach_absolute_time(), ticks = now >= start ? now - start : 0;
+    ABAUTransportRecordCycleDuration(t, (uint64_t)((long double)ticks * t->timebase.numer / t->timebase.denom),
+        (uint64_t)((long double)adoptionTicks * t->timebase.numer / t->timebase.denom), adopted);
+}
+void ABAUTransportRecordCycleDuration(ABAUTransport *t, uint64_t duration, uint64_t adoption, bool adopted) {
+    Shared *s = t->shared;
+    atomic_store_explicit(&s->cycleLast, duration, memory_order_relaxed);
+    atomic_fetch_add_explicit(&s->cycleCount, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&s->cycleTotal, duration, memory_order_relaxed);
+    if (duration > atomic_load_explicit(&s->cycleMax, memory_order_relaxed)) atomic_store_explicit(&s->cycleMax, duration, memory_order_relaxed);
+    uint64_t budget = atomic_load_explicit(&s->blockBudgetNanoseconds, memory_order_relaxed);
+    if (budget && duration > budget) atomic_fetch_add_explicit(&s->cycleOver, 1, memory_order_relaxed);
+    if (adopted) {
+        atomic_fetch_add_explicit(&s->adoptionCount, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&s->adoptionTotal, adoption, memory_order_relaxed);
+        if (adoption > atomic_load_explicit(&s->adoptionMax, memory_order_relaxed)) atomic_store_explicit(&s->adoptionMax, adoption, memory_order_relaxed);
+    }
 }

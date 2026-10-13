@@ -15,6 +15,14 @@ uint32_t ABRingRead(ABRing *ring, float *stereo, uint32_t frames);
 uint32_t ABRingAvailable(const ABRing *ring);
 
 typedef struct ABEngine ABEngine;
+typedef struct ABStartGate ABStartGate;
+ABStartGate *ABStartGateCreate(void);
+void ABStartGateRetain(ABStartGate *gate);
+void ABStartGateRelease(ABStartGate *gate);
+void ABStartGateCancel(ABStartGate *gate);
+bool ABStartGateCancelled(const ABStartGate *gate);
+// Engine retains the attempt gate until confirmed destruction, including failed detach.
+bool ABEngineAttachStartGate(ABEngine *engine, ABStartGate *gate);
 typedef struct {
     float peak1, peak2;
     uint64_t clips1, clips2;

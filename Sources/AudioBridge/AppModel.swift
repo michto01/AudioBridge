@@ -1124,6 +1124,12 @@ final class AppModel: ObservableObject {
                 "Over-budget blocks: \(s.auRenderOverBudgetBlocks)", "Worker signaled waits: \(s.auWorkerWaits)",
                 "Late worker wakeups: \(s.auWorkerLateWakeups)", "Maximum signal-to-wake delay: \(decimal(Double(s.auMaxWorkerWakeLatenessNanoseconds) / 1e6)) ms",
                 "Wall time includes scheduling and is separate from signal delay."])
+            let cycle = s.auWorkerCycle
+            section("AU COMPLETE WORKER CYCLE — RUN TOTALS", [
+                "Cycles: \(cycle.cycles); over budget: \(cycle.overBudget)",
+                "Last / mean / maximum: \(decimal(Double(cycle.lastNanoseconds) / 1e6)) / \(decimal(cycle.cycles > 0 ? Double(cycle.nanoseconds) / Double(cycle.cycles) / 1e6 : 0)) / \(decimal(Double(cycle.maximumNanoseconds) / 1e6)) ms",
+                "Chain adoptions: \(cycle.adoptions); maximum: \(decimal(Double(cycle.maximumAdoptionNanoseconds) / 1e6)) ms",
+                "Includes adoption, context hooks and autorelease-pool cleanup; excludes idle waits. Not signal latency. Reset counters does not reset these run totals."])
             section("AU PLUGIN TIMING", s.auStages.map { stage in
                 let name = auChain.active.first { $0.timingIdentity == stage.identity }?.name ?? "Previous plugin"
                 return "Slot \(stage.slot) · \(name): \(stage.blocks) blocks; mean \(decimal(stage.blocks > 0 ? Double(stage.nanoseconds) / Double(stage.blocks) / 1e6 : 0)) ms; max \(decimal(Double(stage.maximumNanoseconds) / 1e6)) ms; over budget \(stage.overBudget)"

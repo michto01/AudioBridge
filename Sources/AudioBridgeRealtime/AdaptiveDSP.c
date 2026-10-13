@@ -41,6 +41,7 @@ struct ABResampler {
     uint32_t head, primeCount;
     double fraction;
     bool primed, starved;
+    uint64_t generation;
 };
 ABResampler *ABResamplerCreate(void) {
     ABResampler *r = calloc(1, sizeof(*r));
@@ -59,7 +60,7 @@ ABResampler *ABResamplerCreate(void) {
     }
     return r;
 }
-void ABResamplerReset(ABResampler *r) { if (r) { memset(r->window, 0, sizeof(r->window)); r->head = 0; r->primeCount = 15; r->fraction = 0; r->primed = false; r->starved = false; } }
+void ABResamplerReset(ABResampler *r) { if (r) { r->generation++; memset(r->window, 0, sizeof(r->window)); r->head = 0; r->primeCount = 15; r->fraction = 0; r->primed = false; r->starved = false; } }
 void ABResamplerDestroy(ABResampler *r) { free(r); }
 uint32_t ABResamplerLookahead(void) { return 17; }
 bool ABResamplerStarved(const ABResampler *r) { return r && r->starved; }
@@ -75,12 +76,29 @@ uint32_t ABResamplerInputNeeded(const ABResampler *r, uint32_t frames, double ra
     return count;
 }
 uint32_t ABResamplerProcess(ABResampler *r, ABReadStereo read, void *context, float *out, uint32_t frames, double ratio) {
-    if (!r || !read || !out || !frames || frames > 65536 || !isfinite(ratio) || ratio < 0.999 || ratio > 1.001) return 0;
+    ABResamplerPlan plan = ABResamplerPrepare(r, frames, ratio);
+    return ABResamplerProcessPrepared(r, read, context, out, &plan);
+}
+ABResamplerPlan ABResamplerPrepare(const ABResampler *r, uint32_t frames, double ratio) {
+    return (ABResamplerPlan){ .owner = r, .generation = r ? r->generation : 0,
+        .frames = frames, .ratio = ratio, .needed = ABResamplerInputNeeded(r, frames, ratio) };
+}
+bool ABResamplerPlanValid(const ABResampler *r, const ABResamplerPlan *plan) {
+    return r && plan && plan->owner == r && plan->generation == r->generation
+        && plan->frames && plan->frames <= 65536 && plan->needed <= SOURCE_FRAMES
+        && isfinite(plan->ratio) && plan->ratio >= 0.999 && plan->ratio <= 1.001;
+}
+uint32_t ABResamplerProcessPrepared(ABResampler *r, ABReadStereo read, void *context, float *out, const ABResamplerPlan *plan) {
+    // Only callback-owned plans prepared by this API may be passed here.
+    // A reset or even a short/empty process invalidates all previous plans.
+    if (!read || !out || !ABResamplerPlanValid(r, plan)) return 0;
+    uint32_t frames = plan->frames, needed = plan->needed;
+    double ratio = plan->ratio;
+    r->generation++;
     memset(out, 0, (size_t)frames * 2 * sizeof(float));
     r->starved = false;
     // Fetch exactly this callback's source demand once. No per-sample IPC
     // atomics/wakes; short reads retain the same FIR history and phase.
-    uint32_t needed = ABResamplerInputNeeded(r, frames, ratio);
     if (needed > SOURCE_FRAMES) return 0;
     uint32_t available = needed ? read(context, &r->source[0][0], needed) : 0;
     if (available > needed) available = needed;
