@@ -2,6 +2,7 @@
 set -euo pipefail
 APP="${1:-dist/AudioBridge.app}"
 PLIST="$APP/Contents/Info.plist"
+SOURCE_PLIST="$(cd "$(dirname "$0")/.." && pwd)/Resources/Info.plist"
 plutil -lint "$PLIST"
 check() {
   local VALUE
@@ -14,8 +15,8 @@ check CFBundleExecutable AudioBridge
 check CFBundlePackageType APPL
 check LSMinimumSystemVersion 14.0
 check LSUIElement true
-check CFBundleShortVersionString 0.7.1
-check CFBundleVersion 40
+check CFBundleShortVersionString "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE_PLIST")"
+check CFBundleVersion "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$SOURCE_PLIST")"
 check CFBundleIconFile AudioBridge.icns
 [[ -s "$APP/Contents/Resources/AudioBridge.icns" ]]
 for LANGUAGE in en cs; do
