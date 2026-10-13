@@ -22,7 +22,7 @@ final class Editor: NSObject, NSWindowDelegate {
     private var wrapper: AVAudioUnit?
     private var window: NSWindow?
     private var loadTimer: Timer?
-    private var liveCompletion: ((AUEffect?, String?) -> Void)?
+    private var liveCompletion: AUOnceCompletion<(AUEffect?, String?)>?
     private var sizeObservation: NSObjectProtocol?
     private var lastEditorSize = NSSize.zero
     private let bypassStatus = EditorBypassStatus()
@@ -46,7 +46,8 @@ final class Editor: NSObject, NSWindowDelegate {
     static func showLive(effect: AUEffect, wrapper: AVAudioUnit, bypassed: Bool, effectsProcessingEnabled: Bool = true, completion: @escaping (AUEffect?, String?) -> Void) {
         NSApplication.shared.setActivationPolicy(.regular)
         let editor = Editor(effect: effect, output: URL(fileURLWithPath: "/dev/null"))
-        editor.wrapper = wrapper; editor.unit = wrapper.auAudioUnit; editor.liveCompletion = completion
+        editor.wrapper = wrapper; editor.unit = wrapper.auAudioUnit
+        editor.liveCompletion = AUOnceCompletion { completion($0.0, $0.1) }
         editor.bypassStatus.bypassed = bypassed
         editor.bypassStatus.effectsProcessingEnabled = effectsProcessingEnabled
         retained = editor; editor.open()
@@ -109,21 +110,26 @@ final class Editor: NSObject, NSWindowDelegate {
     private func showError(_ message: String) { window?.contentView = NSHostingView(rootView: Text(message).padding()) }
     private func save() {
         do {
-            if let state = unit?.fullState {
-                effect.state = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
-                guard effect.state!.count <= 8 * 1024 * 1024 else { throw AUError("Plugin state exceeds the 8 MB limit.") }
-            }
-            if let liveCompletion {
-                self.liveCompletion = nil
-                statusTimer?.invalidate()
-                if let sizeObservation { NotificationCenter.default.removeObserver(sizeObservation); self.sizeObservation = nil }
-                window?.delegate = nil; window?.close()
-                liveCompletion(effect, nil); Self.retained = nil
+            let next = try AUEditorState.savedEffect(effect, state: unit?.fullState)
+            if liveCompletion != nil {
+                finishLive(next, error: nil)
             } else {
-                try JSONEncoder().encode(effect).write(to: output, options: .atomic)
+                try JSONEncoder().encode(next).write(to: output, options: .atomic)
                 NSApplication.shared.terminate(nil)
             }
-        } catch { showError(error.localizedDescription) }
+        } catch {
+            if liveCompletion != nil { finishLive(nil, error: error.localizedDescription) }
+            else { showError(error.localizedDescription) }
+        }
+    }
+    private func finishLive(_ effect: AUEffect?, error: String?) {
+        guard let completion = liveCompletion else { return }
+        liveCompletion = nil
+        statusTimer?.invalidate(); loadTimer?.invalidate()
+        if let sizeObservation { NotificationCenter.default.removeObserver(sizeObservation); self.sizeObservation = nil }
+        window?.delegate = nil; window?.close()
+        Self.retained = nil
+        completion.finish((effect, error))
     }
     func windowWillClose(_ notification: Notification) {
         if liveCompletion != nil { save() } else { NSApplication.shared.terminate(nil) }

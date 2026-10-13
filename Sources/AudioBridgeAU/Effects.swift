@@ -95,6 +95,26 @@ public struct AUError: Error, LocalizedError, Sendable {
     public init(_ message: String) { self.message = message }
     public var errorDescription: String? { message }
 }
+public enum AUEditorState {
+    public static func savedEffect(_ effect: AUEffect, state: [String: Any]?) throws -> AUEffect {
+        var next = effect
+        if let state {
+            let data = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
+            guard data.count <= 8 * 1024 * 1024 else { throw AUError("Plugin state exceeds the 8 MB limit.") }
+            next.state = data
+        }
+        return next
+    }
+}
+/// Single owner (helper main thread). Clear before calling out to permit reentrancy.
+public final class AUOnceCompletion<Value> {
+    private var callback: ((Value) -> Void)?
+    public init(_ callback: @escaping (Value) -> Void) { self.callback = callback }
+    public func finish(_ value: Value) {
+        guard let callback else { return }
+        self.callback = nil; callback(value)
+    }
+}
 public enum AUBlockSizing {
     public static func frames(startupFill: UInt32) throws -> UInt32 {
         guard startupFill >= 16, startupFill <= 32768 else { throw AUError("Startup fill must be 16–32768 frames.") }

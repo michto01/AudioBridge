@@ -1,15 +1,12 @@
 import AudioBridgeStrings
 import AppKit
 import AudioBridgeEngine
+import AudioBridgeCore
 import Foundation
 import Network
 import Security
 import SwiftUI
 
-enum RemoteCommand {
-    case start, stop
-    case inputGain(Double), outputGain(Double), chainBypass(Bool)
-}
 
 @MainActor
 final class RemoteControlServer: ObservableObject {
@@ -25,6 +22,10 @@ final class RemoteControlServer: ObservableObject {
     @Published private(set) var httpStatus = "Stopped"
     @Published private(set) var oscStatus = "Stopped"
 
+    private var oscFeedbackGeneration = UUID()
+    private var httpEpoch = RemoteServiceEpoch(), oscEpoch = RemoteServiceEpoch()
+    private var httpConnections: [ObjectIdentifier: NWConnection] = [:]
+    private var oscConnections: [ObjectIdentifier: NWConnection] = [:]
     var statusProvider: (() -> [String: Any])?
     var commandHandler: ((RemoteCommand) -> String?)?
 
@@ -52,7 +53,7 @@ final class RemoteControlServer: ObservableObject {
         httpEnabled = running
         persistSettings()
         if running { startHTTPListener() }
-        else { httpListener?.cancel(); httpListener = nil; httpStatus = "Stopped"; updateSummary() }
+        else { stopHTTP(); updateSummary() }
     }
     func setOSCRunning(_ running: Bool) {
         oscEnabled = running
@@ -60,7 +61,7 @@ final class RemoteControlServer: ObservableObject {
         if running {
             startOSCListener(); configureFeedback(); startReporter()
         } else {
-            oscListener?.cancel(); oscListener = nil; oscStatus = "Stopped"
+            stopOSC()
             reportTimer?.cancel(); reportTimer = nil; feedback?.cancel(); feedback = nil
             updateSummary()
         }
@@ -112,42 +113,54 @@ final class RemoteControlServer: ObservableObject {
     private func stopListeners() {
         reportTimer?.cancel(); reportTimer = nil
         feedback?.cancel(); feedback = nil
-        httpListener?.cancel(); httpListener = nil
-        oscListener?.cancel(); oscListener = nil
+        stopHTTP(); stopOSC()
         httpStatus = "Stopped"; oscStatus = "Stopped"
+    }
+    private func stopHTTP() {
+        httpEpoch.invalidate()
+        httpConnections.values.forEach { $0.cancel() }; httpConnections.removeAll()
+        httpListener?.cancel(); httpListener = nil; httpStatus = "Stopped"
+    }
+    private func stopOSC() {
+        oscEpoch.invalidate(); oscFeedbackGeneration = UUID()
+        oscConnections.values.forEach { $0.cancel() }; oscConnections.removeAll()
+        oscListener?.cancel(); oscListener = nil; oscStatus = "Stopped"
     }
     private func updateStatus(_ value: String) { status = value }
     private func updateSummary() {
         status = "HTTP: \(httpEnabled ? httpStatus : "off") · OSC: \(oscEnabled ? oscStatus : "off")"
     }
     private func startHTTPListener() {
+        stopHTTP()
         guard (1024...65535).contains(httpPort) else { httpStatus = "Invalid port"; updateSummary(); return }
         if token.isEmpty { regenerateToken() }
         guard !token.isEmpty else { httpStatus = "Token unavailable"; updateSummary(); return }
-        httpListener?.cancel()
+        let generation = httpEpoch.activate()
         do {
             let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: UInt16(httpPort))!)
             listener.newConnectionLimit = 16
             listener.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in self?.httpStatus = Self.describe(state); self?.updateSummary() }
+                Task { @MainActor in guard let self, self.httpEpoch.accepts(generation) else { return }; self.httpStatus = Self.describe(state); self.updateSummary() }
             }
-            listener.newConnectionHandler = { [weak self] connection in Task { @MainActor in self?.acceptHTTP(connection) } }
+            listener.newConnectionHandler = { [weak self] connection in Task { @MainActor in guard let self else { connection.cancel(); return }; self.acceptHTTP(connection, generation: generation) } }
             listener.start(queue: queue); httpListener = listener; httpStatus = "Starting"
         } catch { httpStatus = "Failed — \(error.localizedDescription)" }
         updateSummary()
     }
     private func startOSCListener() {
+        stopOSC()
         guard (1024...65535).contains(oscPort) else { oscStatus = "Invalid port"; updateSummary(); return }
-        oscListener?.cancel()
+        let generation = oscEpoch.activate()
         do {
             let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: UInt16(oscPort))!)
             listener.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in self?.oscStatus = Self.describe(state); self?.updateSummary() }
+                Task { @MainActor in guard let self, self.oscEpoch.accepts(generation) else { return }; self.oscStatus = Self.describe(state); self.updateSummary() }
             }
             listener.newConnectionHandler = { [weak self] connection in
                 Task { @MainActor in
-                    guard let self else { connection.cancel(); return }
-                    connection.start(queue: self.queue); self.receiveOSC(connection)
+                    guard let self, self.oscEpoch.accepts(generation) else { connection.cancel(); return }
+                    self.track(connection, http: false, generation: generation)
+                    connection.start(queue: self.queue); self.receiveOSC(connection, generation: generation)
                 }
             }
             listener.start(queue: queue); oscListener = listener; oscStatus = "Starting"
@@ -158,10 +171,12 @@ final class RemoteControlServer: ObservableObject {
     private func configureFeedback() {
         guard oscEnabled, !feedbackHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let port = NWEndpoint.Port(rawValue: UInt16(feedbackPort)) else { return }
+        feedback?.cancel(); feedback = nil
+        let generation = oscFeedbackGeneration
         let connection = NWConnection(host: NWEndpoint.Host(feedbackHost), port: port, using: .udp)
         connection.stateUpdateHandler = { [weak self] state in
             if case .failed(let error) = state {
-                Task { @MainActor in self?.updateStatus("OSC feedback failed: \(error.localizedDescription)") }
+                Task { @MainActor in guard let self, self.oscEnabled, self.oscFeedbackGeneration == generation else { return }; self.updateStatus("OSC feedback failed: \(error.localizedDescription)") }
             }
         }
         connection.start(queue: queue)
@@ -169,10 +184,14 @@ final class RemoteControlServer: ObservableObject {
     }
     private func startReporter() {
         guard feedback != nil else { return }
+        let generation = oscFeedbackGeneration
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
-            Task { @MainActor in self?.sendOSCStatus() }
+            Task { @MainActor in
+                guard let self, self.oscEnabled, self.oscFeedbackGeneration == generation else { return }
+                self.sendOSCStatus()
+            }
         }
         timer.resume(); reportTimer = timer
     }
@@ -197,45 +216,41 @@ final class RemoteControlServer: ObservableObject {
         }
     }
 
-    private func acceptHTTP(_ connection: NWConnection) {
-        connection.start(queue: queue)
-        receiveHTTP(connection, accumulated: Data())
-    }
-    private func receiveHTTP(_ connection: NWConnection, accumulated: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, complete, error in
-            Task { @MainActor in
-                guard let self else { connection.cancel(); return }
-                var bytes = accumulated
-                if let data { bytes.append(data) }
-                if bytes.count > 16_384 { self.respond(connection, status: 413, object: ["error": "request too large"]); return }
-                if let request = Self.parseHTTP(bytes) { self.handleHTTP(request, connection: connection) }
-                else if complete || error != nil { self.respond(connection, status: 400, object: ["error": "incomplete request"]) }
-                else { self.receiveHTTP(connection, accumulated: bytes) }
+    private func track(_ connection: NWConnection, http: Bool, generation: UUID) {
+        let id = ObjectIdentifier(connection)
+        if http { httpConnections[id] = connection } else { oscConnections[id] = connection }
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed:
+                Task { @MainActor in
+                    guard let self else { return }
+                    if http, self.httpEpoch.accepts(generation) { self.httpConnections.removeValue(forKey: id) }
+                    if !http, self.oscEpoch.accepts(generation) { self.oscConnections.removeValue(forKey: id) }
+                }
+            default: break
             }
         }
     }
-    private struct HTTPRequest { let method: String; let path: String; let headers: [String: String]; let body: Data }
-    private static func parseHTTP(_ data: Data) -> HTTPRequest? {
-        guard let range = data.range(of: Data("\r\n\r\n".utf8)),
-              let head = String(data: data[..<range.lowerBound], encoding: .utf8) else { return nil }
-        let lines = head.components(separatedBy: "\r\n")
-        guard let first = lines.first else { return nil }
-        let parts = first.split(separator: " ")
-        guard parts.count == 3 else { return nil }
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-        }
-        if headers["transfer-encoding"] != nil { return HTTPRequest(method: "INVALID", path: "", headers: headers, body: Data()) }
-        let bodyStart = range.upperBound
-        let bodyOffset = data.distance(from: data.startIndex, to: bodyStart)
-        let length = Int(headers["content-length"] ?? "0") ?? -1
-        guard (0...16_384).contains(length), data.count >= bodyOffset + length else { return nil }
-        return HTTPRequest(method: String(parts[0]), path: String(parts[1]), headers: headers,
-                           body: data.subdata(in: bodyOffset..<bodyOffset + length))
+    private func acceptHTTP(_ connection: NWConnection, generation: UUID) {
+        guard httpEpoch.accepts(generation) else { connection.cancel(); return }
+        track(connection, http: true, generation: generation)
+        connection.start(queue: queue)
+        receiveHTTP(connection, accumulated: Data(), generation: generation)
     }
-    private func handleHTTP(_ request: HTTPRequest, connection: NWConnection) {
+    private func receiveHTTP(_ connection: NWConnection, accumulated: Data, generation: UUID) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, complete, error in
+            Task { @MainActor in
+                guard let self, self.httpEpoch.accepts(generation) else { connection.cancel(); return }
+                var bytes = accumulated
+                if let data { bytes.append(data) }
+                if bytes.count > 16_384 { self.respond(connection, status: 413, object: ["error": "request too large"]); return }
+                if let request = RemoteHTTPDecoder.frame(bytes) { self.handleHTTP(request, connection: connection) }
+                else if complete || error != nil { self.respond(connection, status: 400, object: ["error": "incomplete request"]) }
+                else { self.receiveHTTP(connection, accumulated: bytes, generation: generation) }
+            }
+        }
+    }
+    private func handleHTTP(_ request: RemoteHTTPRequest, connection: NWConnection) {
         guard request.headers["authorization"].map({ Self.constantTimeEqual($0, "Bearer \(token)") }) == true else {
             respond(connection, status: 401, object: ["error": "unauthorized"]); return
         }
@@ -260,15 +275,15 @@ final class RemoteControlServer: ObservableObject {
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
     }
 
-    private func receiveOSC(_ connection: NWConnection) {
+    private func receiveOSC(_ connection: NWConnection, generation: UUID) {
         connection.receiveMessage { [weak self] data, _, _, error in
             Task { @MainActor in
-                guard let self else { connection.cancel(); return }
+                guard let self, self.oscEpoch.accepts(generation) else { connection.cancel(); return }
                 if let data, data.count <= 1024,
                    let source = connection.endpoint.hostAddress,
                    Self.allowed(source, by: self.allowedOSCAddresses),
-                   let command = Self.parseOSC(data) { _ = self.commandHandler?(command) }
-                if error == nil { self.receiveOSC(connection) } else { connection.cancel() }
+                   let command = RemoteOSCDecoder.command(data, gainRange: GainSettings.range) { _ = self.commandHandler?(command) }
+                if error == nil { self.receiveOSC(connection, generation: generation) } else { connection.cancel() }
             }
         }
     }
@@ -285,31 +300,6 @@ final class RemoteControlServer: ObservableObject {
             return .chainBypass(value)
         default: return nil
         }
-    }
-    private static func parseOSC(_ data: Data) -> RemoteCommand? {
-        var cursor = 0
-        guard let address = oscString(data, cursor: &cursor), address.hasPrefix("/audiobridge/") else { return nil }
-        guard let typeTag = oscString(data, cursor: &cursor), typeTag.first == "," else { return nil }
-        let types = String(typeTag.dropFirst())
-        func number() -> Double? {
-            guard cursor + 4 <= data.count else { return nil }
-            let value = data[cursor..<cursor + 4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-            cursor += 4
-            return Double(Float(bitPattern: value))
-        }
-        switch address {
-        case "/audiobridge/start": return .start
-        case "/audiobridge/stop": return .stop
-        case "/audiobridge/input/gain": guard let n = number(), types == "f", n.isFinite, GainSettings.range.contains(n) else { return nil }; return .inputGain(n)
-        case "/audiobridge/output/gain": guard let n = number(), types == "f", n.isFinite, GainSettings.range.contains(n) else { return nil }; return .outputGain(n)
-        case "/audiobridge/effects/bypass": guard let n = number(), types == "i", n == 0 || n == 1 else { return nil }; return .chainBypass(n == 1)
-        default: return nil
-        }
-    }
-    private static func oscString(_ data: Data, cursor: inout Int) -> String? {
-        guard cursor < data.count, let end = data[cursor...].firstIndex(of: 0), let result = String(data: data[cursor..<end], encoding: .utf8) else { return nil }
-        cursor = ((end + 4) / 4) * 4
-        return result
     }
     private static func oscMessage(_ address: String, string value: String) -> Data { var d = oscPadded(address) + oscPadded(",s"); d += oscPadded(value); return d }
     private static func oscMessage(_ address: String, int value: Int32) -> Data { var d = oscPadded(address) + oscPadded(",i"); d.appendBE(UInt32(bitPattern: value)); return d }
