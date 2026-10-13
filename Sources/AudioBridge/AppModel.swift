@@ -289,10 +289,26 @@ final class AppModel: ObservableObject {
     }
     func selectUID(_ uid: String, direction: AudioDirection) {
         var next = selection
-        let endpoint = EndpointSelection(uid: uid.isEmpty ? nil : uid)
+        let endpoint = EndpointSelection(uid: uid.isEmpty ? nil : uid,
+            lastKnownName: catalog.devices.first { $0.uid == uid }?.name)
         if direction == .input { next.input = endpoint; next.inputMix = [] } else { next.output = endpoint; next.outputMap = [] }
         commit(next)
         if direction == .output { refreshOutputDeviceVolume() }
+    }
+    func selectedDeviceMissing(_ direction: AudioDirection) -> Bool {
+        endpoint(direction).uid != nil && device(direction) == nil
+    }
+    func selectedDeviceName(_ direction: AudioDirection) -> String {
+        device(direction)?.name ?? endpoint(direction).lastKnownName
+            ?? LT(endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing")
+    }
+    private func rememberSelectedDeviceNames() {
+        var next = selection
+        if let device = device(.input) { next.input.lastKnownName = device.name }
+        if let device = device(.output) { next.output.lastKnownName = device.name }
+        guard next != selection else { return }
+        do { try store.save(next); selection = next }
+        catch { self.error = "Unable to save device names: \(error.localizedDescription)" }
     }
     var canEditPatches: Bool { canSave && !routingTransitioning && !changingDeviceBuffer }
     func setInputPatch(channel: Int, left: Double, right: Double) {
@@ -869,6 +885,7 @@ final class AppModel: ObservableObject {
                     self.observation?.watch(snapshot.devices)
                     self.catalog = CatalogSnapshot(devices: snapshot.devices,
                         issues: snapshot.issues + (self.observation?.issues ?? []))
+                    self.rememberSelectedDeviceNames()
                     self.refreshOutputDeviceVolume()
                 case .failure(let error):
                     self.catalog = CatalogSnapshot(devices: [], issues: ["Discovery failed: \(error)"])

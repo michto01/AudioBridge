@@ -27,6 +27,7 @@ struct InfoGroupBox<Content: View>: View {
 }
 
 struct SettingsGroupBoxStyle: GroupBoxStyle {
+    var warning = false
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             configuration.label.font(.system(size: 16, weight: .bold))
@@ -35,8 +36,8 @@ struct SettingsGroupBoxStyle: GroupBoxStyle {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary, lineWidth: 1) }
+        .background(warning ? Color.orange.opacity(0.1) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(warning ? Color.orange.opacity(0.6) : Color.primary.opacity(0.08), lineWidth: 1) }
     }
 }
 

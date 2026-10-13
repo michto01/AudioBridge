@@ -119,8 +119,9 @@ private struct MenuEndpointCard: View {
                     if let device {
                         DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid], size: 30)
                     } else {
-                        Image(systemName: direction == .input ? "mic" : "speaker.wave.2")
+                        Image(systemName: model.selectedDeviceMissing(direction) ? "exclamationmark.triangle" : (direction == .input ? "mic" : "speaker.wave.2"))
                             .resizable().scaledToFit().frame(width: 30, height: 30)
+                            .foregroundStyle(model.selectedDeviceMissing(direction) ? Color.orange : Color.secondary)
                     }
                 }
                 .frame(width: 50, height: 50)
@@ -128,20 +129,23 @@ private struct MenuEndpointCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(LT(direction == .input ? "Input device" : "Output device"))
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    Text(device?.name ?? LT(model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
+                    Text(model.selectedDeviceName(direction))
                         .font(.system(size: 15, weight: .semibold)).lineLimit(2)
                         .frame(height: 38, alignment: .leading)
-                        .help(device?.name ?? L("Device not connected"))
+                        .help(model.selectedDeviceName(direction))
+                    if model.selectedDeviceMissing(direction) {
+                        Text(L("Selected device missing")).font(.caption).foregroundStyle(.orange)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             SignalMeters(model: model, direction: direction, compact: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(model.selectedDeviceMissing(direction) ? Color.orange.opacity(0.1) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.primary.opacity(0.06), lineWidth: 1)
+                .strokeBorder(model.selectedDeviceMissing(direction) ? Color.orange.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
                 .allowsHitTesting(false)
         }
     }

@@ -1,6 +1,6 @@
 # Roadmap and acceptance gates
 
-Implementation and acceptance are separate. The current **0.7.3/build 42** slice fixes CI concurrency/SDK compatibility and adds downloadable GitHub ZIP artifacts following the menu presentation work; audio reliability/hardware acceptance remains open. No phase advancement implies completed earlier hardware gates.
+Implementation and acceptance are separate. The current **0.7.4/build 43** slice adds missing-device presentation and successful-tag prerelease publication following CI compatibility fixes; audio reliability/hardware acceptance remains open. No phase advancement implies completed earlier hardware gates.
 
 ## Milestones
 

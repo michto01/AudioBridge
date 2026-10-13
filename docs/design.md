@@ -1,5 +1,7 @@
 # Interface and operator behavior
 
+Saved missing devices use an amber card background/border and an explicit warning icon/label in Bridge, Audio and the menu popover. The last observed name is persisted as display metadata only; UID and physical patches remain the routing identity. Older selections without a stored name show the generic missing-device label until that device is observed again. Unconfigured endpoints remain visually distinct from disconnected saved endpoints.
+
 ## Visual direction
 
 Native macOS controls, system light/dark materials, bounded SF/driver icons and restrained status colors with text/accessibility alternatives. Settings groups use bold headings and `(i)` explanations; technical details belong in Diagnostics. Driver images are rasterized to font-size bounds for native pickers; larger device cards request explicit sizes.

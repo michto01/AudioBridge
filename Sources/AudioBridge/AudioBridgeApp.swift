@@ -274,7 +274,7 @@ private struct SettingsView: View {
                         }.tag(device.uid)
                     }
                     if let uid = selected.uid, !available.contains(where: { $0.uid == uid }) {
-                        Text(L("Selected device unavailable")).tag(uid)
+                        Text(model.selectedDeviceName(direction) + " — " + L("Selected device unavailable")).tag(uid)
                     }
                 }.disabled(!model.canEditSelections)
                 if let device {
@@ -286,8 +286,13 @@ private struct SettingsView: View {
                         Text(L("Supported buffer range: \(range.minimum.formatted())–\(range.maximum.formatted()) frames")).font(.caption)
                     }
                 }
+                if model.selectedDeviceMissing(direction) {
+                    Label(L("Selected device missing"), systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
             }.padding(6)
         }
+        .groupBoxStyle(SettingsGroupBoxStyle(warning: model.selectedDeviceMissing(direction)))
     }
     private func deviceDetails(_ device: DeviceFacts) -> some View {
         VStack(alignment: .leading, spacing: 8) {

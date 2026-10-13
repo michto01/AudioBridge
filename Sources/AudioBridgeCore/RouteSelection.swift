@@ -2,11 +2,13 @@ import Foundation
 
 public struct EndpointSelection: Codable, Equatable, Sendable {
     public var uid: String?
+    /// Display metadata only; routing identity remains the UID.
+    public var lastKnownName: String?
     /// Physical channel indices are one-based. Nil means deliberately unconfigured.
     public var lane1: Int?
     public var lane2: Int?
-    public init(uid: String? = nil, lane1: Int? = nil, lane2: Int? = nil) {
-        self.uid = uid; self.lane1 = lane1; self.lane2 = lane2
+    public init(uid: String? = nil, lane1: Int? = nil, lane2: Int? = nil, lastKnownName: String? = nil) {
+        self.uid = uid; self.lane1 = lane1; self.lane2 = lane2; self.lastKnownName = lastKnownName
     }
     public func issue(in devices: [DeviceFacts], direction: AudioDirection) -> String? {
         guard let uid else { return "\(direction.rawValue.capitalized) is unconfigured." }

@@ -58,14 +58,14 @@ Build options are a whitespace-separated argument list, not shell code; paths co
 
 Keep generated `.build/`, `dist/` and `.diagnostics/` out of commits. Preserve scoped source history and accepted ADRs. Configure your own Git remote; no repository/account URL is assumed by this guide.
 
-CI is configured for pushes to `main` and pull requests on macOS 14. Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it builds/tests/packages, requires the tag to match `CFBundleShortVersionString`, then uploads a ZIP/checksum artifact. It can also be run manually with a matching tag selected. Download the artifact from the Actions run and attach its inner app ZIP/checksum to a manual GitHub release. Pushing a tag does not automatically publish a release. Clean-install results are not established by packaging.
+CI is configured for pushes to `main` and pull requests on macOS 14. Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it builds/tests/packages, requires the tag to match `CFBundleShortVersionString`, uploads a ZIP/checksum artifact, then publishes a GitHub prerelease with those files. It can also be run manually with a matching tag selected. Reruns update attachments on an existing release without changing its publication status. Clean-install results are not established by packaging.
 
 ```sh
 make release
 # After review, with origin configured and the bundle version matching:
 git push origin main
-git tag -a v0.7.3 -m 'Audio Bridge 0.7.3'
-git push origin v0.7.3
+git tag -a v0.7.4 -m 'Audio Bridge 0.7.4'
+git push origin v0.7.4
 ```
 
-The workflow creates downloadable Actions artifacts, not GitHub releases. Mark development releases as prereleases when publishing manually. See [compliance](compliance.md) and [ADR-007](decisions/ADR-007-build-and-distribution.md).
+New automated releases are marked prerelease while hardware acceptance remains open. Artifact downloads remain available from Actions. See [compliance](compliance.md) and [ADR-007](decisions/ADR-007-build-and-distribution.md).

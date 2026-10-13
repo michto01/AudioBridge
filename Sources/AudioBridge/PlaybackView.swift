@@ -114,17 +114,19 @@ private struct PlaybackEndpointCard: View {
                     if let device {
                         DeviceIcon(device: device, direction: direction, image: model.deviceIcons[device.uid], size: 42)
                     } else {
-                        Image(systemName: direction == .input ? "mic" : "speaker.wave.2")
+                        Image(systemName: model.selectedDeviceMissing(direction) ? "exclamationmark.triangle" : (direction == .input ? "mic" : "speaker.wave.2"))
                             .resizable().scaledToFit().frame(width: 42, height: 42)
+                            .foregroundStyle(model.selectedDeviceMissing(direction) ? Color.orange : Color.secondary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(device?.name ?? LT(model.endpoint(direction).uid == nil ? "Unconfigured" : "Selected device missing"))
+                        Text(model.selectedDeviceName(direction))
                             .font(.headline).lineLimit(2).frame(height: 42, alignment: .leading)
                         if let device {
                             Text(L("\(device.facts(for: direction).channelCount ?? 0) channels · \(rate(device.nominalSampleRate))"))
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
-                            Text(L("Device not connected")).font(.caption).foregroundStyle(.secondary)
+                            Text(LT(model.selectedDeviceMissing(direction) ? "Selected device missing" : "Unconfigured"))
+                                .font(.caption).foregroundStyle(model.selectedDeviceMissing(direction) ? Color.orange : Color.secondary)
                         }
                     }
                     Spacer(minLength: 0)
@@ -141,6 +143,7 @@ private struct PlaybackEndpointCard: View {
             .padding(3)
         }
         .frame(maxWidth: .infinity)
+        .groupBoxStyle(SettingsGroupBoxStyle(warning: model.selectedDeviceMissing(direction)))
     }
     private var endpointHelp: String {
         let shared = L("Click the device name or icon to open Audio configuration. Meters show measured stereo Mix L/R peaks; CLIP is a signal-level indication and holds briefly. Inactive means routing is stopped or callbacks are not fresh. Digital trim changes both channels smoothly and cannot undo clipping already present at capture.")

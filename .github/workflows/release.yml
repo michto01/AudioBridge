@@ -1,4 +1,4 @@
-name: macOS ZIP artifact
+name: macOS ZIP prerelease
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -35,3 +35,13 @@ jobs:
             dist/AudioBridge-macOS.zip
             dist/AudioBridge-macOS.zip.sha256
           if-no-files-found: error
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/AudioBridge-macOS.zip dist/AudioBridge-macOS.zip.sha256 --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/AudioBridge-macOS.zip dist/AudioBridge-macOS.zip.sha256 --verify-tag --prerelease --generate-notes
+          fi
