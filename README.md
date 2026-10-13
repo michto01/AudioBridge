@@ -2,111 +2,67 @@
   <img src="Resources/AudioBridge.png" width="112" height="112" alt="Audio Bridge icon">
 </p>
 
-# Audio Bridge
+# Audio Bridge 🎛️
 
-**Native macOS audio routing for live production.**
+A native macOS menu-bar app for bridging audio between Core Audio devices. Mix inputs into stereo, add Audio Unit effects, and route the mix to your output channels.
 
-Audio Bridge connects an explicitly selected Core Audio input to an explicitly selected output. Mix physical inputs into stereo, add installed Audio Unit effects, and patch the stereo mix to physical output channels—all from a menu-bar app with a separate settings window.
+**macOS 14+ · SwiftUI · English / Czech · MIT**
 
-**macOS 14+ · SwiftUI · Core Audio · Swift Package Manager · English / Czech**
+🚧 Currently a hobby project developed and tested locally on Apple Silicon. Builds are ad-hoc signed and not notarized; broader hardware and long-run validation are still in progress.
 
-## Features
+## 🎚️ Features
 
-- Device selection by persistent UID, with no automatic substitution of system defaults.
-- Mono/stereo presets and an expandable N×2 input matrix with stereo output fan-out.
-- Adaptive drift compensation between independently clocked devices.
-- Smooth input trim, device output volume or digital gain fallback, stereo meters and clipping indicators.
-- Installed AU effect chains with searchable selection, editors, live changes, bypass and DSP suspension.
-- Simple shared device settings or Expert control of interface buffers, FIFO reserve and AU block size.
-- Explicit device-loss re-arming, persisted manual Stop, optional login launch and resume.
-- Optional HTTP/OSC status and control for tools such as Bitfocus Companion.
+- Independent input/output selection and drift compensation.
+- Mono/stereo presets, input mixing matrix and stereo output fan-out.
+- Installed AU effects, live editing, bypass and searchable effect selection.
+- Level meters, input trim and output-device volume with gain fallback.
+- Simple or Expert buffer settings, optional exclusive device access.
+- Optional login launch and HTTP/OSC status and control for Companion.
 
-No audio recording, network audio transport or cloud service is built into the app.
+## 🛠️ Build and install
 
-## Project status
-
-**0.7.1 / build 40 is a prerelease.** Local release packaging/signature checks pass on Apple Silicon. The last recorded automated audio/control suite passed **72 tests on 0.6.5**; subsequent menu and shell changes were not followed by a new suite run. A documented 12-hour hardware run, broader driver/plugin compatibility and clean-install acceptance remain open. See [validation history](docs/history/validation.md) and [acceptance gates](docs/testing.md).
-
-## Requirements
-
-- macOS 14 or later; Apple Silicon is the primary development platform. Intel and macOS 14 runtime acceptance are not yet established.
-- Xcode with an Apple macOS SDK and Swift 5.9 or newer for building. Recent local checks used Swift 6.4.
-- Two distinct Core Audio device UIDs with matching current sample rates and supported native packed Float32 PCM streams.
-
-Built-in, USB, Thunderbolt and virtual devices are considered by their capabilities, not brand. Aggregate, Bluetooth and AirPlay devices require individual validation. Same-device duplex, arbitrary nominal-rate conversion, integer PCM and independently opened multiple output devices are not implemented. See [device compatibility](docs/device-compatibility.md).
-
-## Build and run
-
-From the repository directory:
+Install Xcode, clone or download this repository, then run from its directory:
 
 ```sh
 make doctor
 make BUILD_CONFIGURATION=release sign
 make verify
+```
+
+Quit any running copy, then copy `dist/AudioBridge.app` into `~/Applications` or `/Applications` and open it. For a quick run directly from the checkout:
+
+```sh
 make BUILD_CONFIGURATION=release run
 ```
 
-The app is created at `dist/AudioBridge.app`. Quit an older running copy before rebuilding that bundle or opening another version. `make run` builds, packages and signs before launching; packaging refuses to overwrite a running destination.
-
-For automated checks and a release ZIP:
+If macOS blocks a downloaded build, use **System Settings → Privacy & Security → Open Anyway**. Alternatively, for a build you trust, remove quarantine from that app only:
 
 ```sh
-make test
-make release
+xattr -dr com.apple.quarantine "$HOME/Applications/AudioBridge.app"
+open "$HOME/Applications/AudioBridge.app"
 ```
 
-`make release` creates `dist/AudioBridge-macOS.zip` and its SHA-256 checksum. Other public targets are `build`, `app`, `probe` and `clean`. SwiftPM is the canonical build system; there is no Xcode project or external package dependency. See the [build guide](docs/build.md) for command details and GitHub publishing.
+Adjust the path if installed in `/Applications`. Locally compiled builds usually don't need this step. For File Provider/iCloud signing errors and all build targets, see the [build guide](docs/build.md).
 
-### iCloud / File Provider storage
+## ▶️ Usage
 
-Finder metadata can invalidate signatures when the checkout is in File Provider storage, even beneath a `.nosync` folder. If signing or verification reports “resource fork, Finder information, or similar detritus,” use a local output folder:
+1. Open **Settings → Audio**, select input/output devices and apply matching sample rates.
+2. Grant microphone permission in **General**.
+3. Set channel patches in **Routing** and optionally add **Effects**.
+4. Press **Start** in **Bridge**. Monitor levels and output volume from the menu bar.
 
-```sh
-make BUILD_CONFIGURATION=release DIST_DIR=/tmp/AudioBridge-local run
-make DIST_DIR=/tmp/AudioBridge-local verify
-```
+Device loss stops the bridge and requires local **Re-arm**. Manual **Stop** stays stopped. Keep monitoring volume low when routing a microphone to speakers.
 
-Temporary output is for development, not a stable installation. No iCloud settings are changed by the build. See [troubleshooting](docs/build.md#file-provider-and-signatures).
+Current support requires distinct device UIDs, matching sample rates and native packed Float32 PCM. See [compatibility](docs/device-compatibility.md), [remote endpoints](docs/remote-control.md) and the [documentation index](docs/README.md) for details.
 
-## Usage
+## 🤝 Contributing
 
-1. Open **Settings → Audio**, explicitly select input and output, and confirm matching sample rates. In Simple mode, apply shared device settings while stopped.
-2. In **General**, grant microphone permission when requested. Device-error notification permission is optional.
-3. In **Routing**, choose Mono → L + R or Stereo, then review the physical output patches. Keep monitoring volume low when connecting a microphone to speakers.
-4. Optionally add and edit installed Audio Units in **Effects**.
-5. Return to **Bridge** and press **Start**. The menu popover shows the selected devices, measured stereo levels, output-device volume and runtime.
+Issues and focused pull requests are welcome. For audio bugs, include your device setup and a sanitized **Diagnostics → Copy Status** report. Development commands: `make test` and `make release`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-| Menu status | Meaning |
-|---|---|
-| Grey | Stopped or unconfigured |
-| Green | Confirmed fresh local callbacks and primed delivery |
-| Amber | Starting or a recent delivery warning |
-| Red | Action required |
+## ☕ Enjoying it?
 
-Green confirms local delivery, not audible reception downstream. **Stop** persists and suppresses retries/resume. Device loss or route changes require explicit local **Re-arm**; remote Start cannot clear that latch. Closing Settings does not stop the engine.
+This is a hobby project. A ⭐, feedback or a useful bug report is appreciated! If you'd like to buy me a coffee, get in touch through this repository—we'll figure something out. 😄
 
-The menu is for monitoring; device selection and digital trim stay in Settings. **Diagnostics → Copy Status** provides a technical report without audio or plugin state. See the [interface guide](docs/design.md) for effects, buffers, meters and delay estimates.
+## 📄 License
 
-### Remote control
-
-Enable HTTP and OSC independently in **Settings → Remote**. HTTP uses a Keychain bearer token; OSC commands require an exact source-IP allowlist. Both default off. These services carry status/control only, use no TLS/OSC cryptographic authentication, and belong on a trusted production LAN. Full endpoints and Companion setup are in the [remote protocol reference](docs/remote-control.md).
-
-### Login and permissions
-
-Install a verified bundle in `/Applications` or your user Applications folder before enabling **Start at login**. Login launch and **Resume routing when the app launches** are separate opt-ins. Development builds are ad-hoc signed, not Developer ID signed or notarized; rebuilding can invalidate microphone authorization. See [deployment and privacy](docs/compliance.md).
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [Product contract](docs/overview.md) and [architecture](docs/architecture.md)
-- [Architecture decisions](docs/decisions/README.md)
-- [Roadmap and review gates](docs/plan.md)
-- [Testing and hardware acceptance](docs/testing.md)
-
-## Contributing
-
-Bug reports, documentation improvements and focused pull requests are welcome. For audio issues, include the version/build, explicit device setup, buffers/effects and a sanitized Copy Status report. Never include tokens or audio recordings. Follow [CONTRIBUTING.md](CONTRIBUTING.md), especially the realtime ownership and device-safety requirements.
-
-## License
-
-[MIT](LICENSE). Installed Audio Units and Apple tooling remain subject to their own licenses.
+[MIT](LICENSE).
