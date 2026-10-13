@@ -1,6 +1,6 @@
 # Roadmap and acceptance gates
 
-Implementation and acceptance are separate. The current **0.7.1/build 40** slice is menu presentation; audio reliability/hardware acceptance remains open. No phase advancement implies completed earlier hardware gates.
+Implementation and acceptance are separate. The current **0.7.2/build 41** slice fixes CI concurrency compatibility following the menu presentation work; audio reliability/hardware acceptance remains open. No phase advancement implies completed earlier hardware gates.
 
 ## Milestones
 

@@ -58,14 +58,14 @@ Build options are a whitespace-separated argument list, not shell code; paths co
 
 Keep generated `.build/`, `dist/` and `.diagnostics/` out of commits. Preserve scoped source history and accepted ADRs. Configure your own Git remote; no repository/account URL is assumed by this guide.
 
-CI is configured for pushes to `main` and pull requests on macOS 14. A pushed `vX.Y.Z` tag invokes `.github/workflows/release.yml`, builds/tests/packages and requires the tag to match `CFBundleShortVersionString`, then publishes the ZIP/checksum. Tag publication is a deliberate maintainer action; workflow availability on GitHub and clean-install results are not established by local packaging.
+CI is configured for pushes to `main` and pull requests on macOS 14. Releases can be created manually on GitHub with the ZIP/checksum from `make release`. Alternatively, manually run `.github/workflows/release.yml` with a `vX.Y.Z` tag selected: it builds/tests/packages, requires the tag to match `CFBundleShortVersionString`, then publishes the ZIP/checksum. Pushing a tag does not automatically publish a release. Clean-install results are not established by local packaging.
 
 ```sh
 make release
 # After review, with origin configured and the bundle version matching:
 git push origin main
-git tag -a v0.7.1 -m 'Audio Bridge 0.7.1'
-git push origin v0.7.1
+git tag -a v0.7.2 -m 'Audio Bridge 0.7.2'
+git push origin v0.7.2
 ```
 
 The current workflow creates a regular GitHub release, not a prerelease automatically. Change that policy deliberately before publishing development tags if desired. No push, tag or release is performed by documentation updates. See [compliance](compliance.md) and [ADR-007](decisions/ADR-007-build-and-distribution.md).
