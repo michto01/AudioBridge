@@ -118,6 +118,8 @@ CPU comparisons and Phase 5 operational acceptance remain pending.
 
 ## 0.6 — Audio reliability revision (current review gate)
 
+Audit implementation follow-up: 0.6.5/build 38 fixes live-editor completion, adds irreversible per-attempt cancellation gates, invalidates remote connections/callbacks at shutdown, corrects OSC integers, narrows runtime probes, optimizes sparse routing and prepared FIR demand, and adds complete worker-cycle/adoption timing. The 72-test suite and release bundle verification pass. Component benchmarks and remaining live acceptance are documented in [audit implementation results](audit-fixes-optimization-results.md). Review gate remains open; no running app was replaced or launched.
+
 Prerelease follow-up: 0.6.4/build 37 adds cached, case/accent-insensitive effect search and runs the deferred automated suite. Operator reports scrolling noise now acceptable, a clean run with zero drops/underruns/overruns, acceptable localized UI and partial device-loss checks sufficient for their current use case. Duration, exact build and setup were not supplied; this is not a documented 12-hour deployment gate. See [acceptance and checks](prerelease-search-results.md).
 
 Operator-language and permissions follow-up: 0.6.3/build 36 reviews Czech audio terminology against Audacity, distinguishes notification preference from actual macOS authorization, groups permissions in General and avoids redundant meter geometry updates during scrolling. No system-audio capture or DSP retuning is added. See [source findings and pending acceptance](translation-permissions-scroll-results.md). Scrolling-related noise, permission shortcuts and audio/soak acceptance remain unverified.
@@ -128,7 +130,7 @@ Audio-first follow-up: 0.6.1/build 34 corrects the full-block-only AU input pull
 
 User authorized this slice on 2026-10-12. [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) records device-loss stop/re-arm semantics and operator setup. Version 0.6.0/build 33 implements lifetime/reporting repairs, asynchronous AU workgroup/context integration, notification-driven latency refresh, plugin/stall telemetry, explicit AU blocks, shared Simple configuration, retained Expert controls and English/Czech localization. See [implementation, commands and pending acceptance](release-0.6-results.md).
 
-Gate: deterministic queue/wake/ownership checks, device drop/re-arm checks, plugin isolation comparisons at 128 input / 32 output / 128 reserve, physical loopback latency and a 12-hour run with bounded queues and no lost frames. All runtime/test gates remain pending. Build/signature checks do not complete the gate. Stop for review; no distribution or unattended readiness claim.
+Gate: deterministic queue/wake/ownership checks, device drop/re-arm checks, plugin isolation comparisons at 128 input / 32 output / 128 reserve, physical loopback latency and a 12-hour run with bounded queues and no lost frames. The automated suite passes for 0.6.5; actual driver/plugin interleavings and the runtime gates remain pending. Build/signature checks do not complete the gate. Stop for review; no distribution or unattended readiness claim.
 
 ## Suggested release milestones
 

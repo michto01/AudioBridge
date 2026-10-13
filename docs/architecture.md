@@ -1,5 +1,9 @@
 # Architecture
 
+Current 0.6.5 audit amendment: each start attempt owns an irreversible lock-free C cancellation gate. Stop cancels all published attempts synchronously; preparation and HAL startup check the gate, and callbacks suppress processing after cancellation. An already executing callback can finish its current work. The engine retains the gate until confirmed destruction; uncertain detach retains callback memory and its gate. Retired Swift attempts are removed during lifecycle teardown, including automatic retries. Swift publication locks never span HAL calls. Driver calls themselves remain potentially blocking.
+
+The watchdog probes selected UIDs, duplicate identities, liveness, current rates/buffers, stream ordering/layout/current formats and latency without fetching static capability ranges or available formats. Full catalogs remain for setup. Device-volume operations resolve the explicit UID afresh and read/write only the necessary volume properties. Sparse routes use callback-owned preallocated active/ramping channel lists; fade-out remains active until complete and all unpatched output buffers are explicitly zeroed. Coherent 64-bit publication versions skip unchanged targets and reject exhaustion. FIR demand plans retain the original arithmetic and are valid only for their owner, ratio and resampler generation; reset/process invalidates them.
+
 Current continuous-switch amendment: app routes retain the AU helper transport with DSP off, but a dry start loads no plugins. First enable prepares/adopts the saved chain while dry blocks continue. A 20 ms dry/wet ramp precedes DSP suspension. Output starts before capture; callback supervision uses monotonic time. See [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) and [pipeline audit](continuous-dsp-pipeline-results.md).
 
 Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
@@ -84,7 +88,11 @@ are outside callbacks. A kernel notification has overhead; this is not a claim
 that arbitrary system calls are cost-free or bounded by an audio deadline.
 Shutdown wakes an armed helper. Wake telemetry measures signal-to-resume delay,
 excluding normal time waiting for capture/space. The shared protocol is version
-6; app and helper must come from the same bundle.
+8; app and helper must come from the same bundle. Separate complete worker-cycle
+timing includes renderer adoption, foreign context hooks and processing pool
+drain, excludes idle waiting, and is not added to signal latency. These counters
+are run totals and do not reset with the operator's diagnostic observation
+baseline. Existing DSP block timing remains separate.
 
 The dedicated helper render thread requests `THREAD_TIME_CONSTRAINT_POLICY`
 using its block duration as period/constraint and half that duration as nominal
@@ -118,6 +126,10 @@ Include `NSMicrophoneUsageDescription` for capture, test TCC authorization with 
 ## Remote control and reporting
 
 Opt-in HTTP/OSC listeners use Apple's Network framework; no third-party package is needed. HTTP exposes a JSON status snapshot and a small command set (Start, Stop, input/output gain, chain bypass) behind a random Keychain bearer token. OSC uses standard UDP messages, accepts commands only from explicitly allowlisted source IPs, and reports status/meters to a configured Companion host/port once per second. Listeners default off. HTTP is plain-text and intended only for a trusted local production network; bearer tokens are not protected from network sniffing. UDP OSC has no protocol authentication. No audio samples or plugin state are sent. See `docs/remote-control.md`.
+
+Each service has an independent generation. Shutdown invalidates it before cancelling listeners and all tracked accepted connections; acceptance, receive/dispatch and status callbacks reject previous generations. Feedback timer callbacks also reject stale feedback generations. Parsers live in AudioBridgeCore for deterministic testing; OSC commands require exact tags, argument count and packet length, with signed big-endian integers distinct from IEEE floating-point gain values.
+
+Live editor completion clears editor ownership and finishes exactly once, including invalid or oversized state serialization. Failed saving retains the previous saved state and reports an error without stopping audio; parameter changes already made live are not rolled back.
 
 ## Hardware probe before implementation lock
 

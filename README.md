@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.6.4/build 37 adds searchable effect selection and executes the deferred automated suite. The operator reports clean audio with zero drops/underruns/overruns and acceptable English/Czech UI; device-loss checks are partial. See [prerelease acceptance and effect search](docs/prerelease-search-results.md). The timed 12-hour and broader hardware gates remain separate.**
+Status: **0.6.5/build 38 implements the independent audit fixes, narrows runtime discovery, optimizes sparse routing and FIR demand reuse, and reports complete AU worker-cycle timing. All 72 automated tests pass; the separate release bundle passes ad-hoc signature and identity checks. See [fixes, measurements and pending acceptance](docs/audit-fixes-optimization-results.md). Earlier operator clean-run reports do not validate this revision; the timed 12-hour and broader hardware gates remain open.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 

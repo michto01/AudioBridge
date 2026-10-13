@@ -73,3 +73,5 @@ Further profiling candidates: cache-line separation of shared indices/telemetry,
 Driver calls themselves can hang on the lifecycle queue; the later callback-drain timeout does not bound `AudioDeviceStop` or `AudioDeviceDestroyIOProcID`. Plugin property/teardown calls can block the helper main thread while render heartbeat continues. Source review cannot prove third-party lock behavior or scheduling reliability.
 
 Recommended next slice: editor-command completion, Stop transition guard/gate and remote generation/connection lifecycle, with parser and failure-path tests. Then narrow discovery and improve complete-cycle timing before performance comparisons. FIR/SIMD and sparse-route changes should follow targeted benchmarks. This report introduces no audio or UI behavior changes.
+
+Implementation follow-up: [0.6.5 audit fixes and optimization results](audit-fixes-optimization-results.md) records the user-approved corrections, component comparisons, final 72-test run, packaging verification and remaining live acceptance. The findings above describe the historical audited source.

@@ -72,4 +72,6 @@ Manual acceptance: mono and stereo defaults; more than two inputs; duplicated L/
 
 ## 0.6 reliability acceptance
 
+The 0.6.5 automated run passes 72 tests, including editor state/completion, cancellation gates, remote parsers/epochs, sparse routing, prepared FIR demand, runtime topology matching and complete-cycle accounting. See [actual checks and remaining live cases](audit-fixes-optimization-results.md). Earlier statements that routing regression sources were uncompiled describe the historical extension stage, not this run. Real socket, HAL transition and third-party editor failure checks remain separate.
+
 Use the comparison matrix, queue/wake/lifetime cases, explicit re-arm checks and 12-hour gate in [0.6 results](release-0.6-results.md#deferred-06-acceptance). For 0.6.2 compare an empty transport, loaded-DSP-off, individual active plugins and the full chain using equal measurement windows and identical device/reserve settings. DSP-off now retains transport; a no-helper baseline requires a separately identified earlier build or isolated harness. Include the transition/startup/monotonic supervision cases in [continuous DSP results](continuous-dsp-pipeline-results.md). No execution is implied by this checklist.
