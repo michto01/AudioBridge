@@ -96,7 +96,9 @@ struct MenuPopoverView: View {
 private struct FocusedSettingsLinkStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button {
-            Task { @MainActor in
+            // SwiftUI invokes button actions on the main thread. Keep its
+            // non-Sendable configuration here instead of transferring to a task.
+            MainActor.assumeIsolated {
                 SettingsWindowFocus.show { configuration.trigger() }
             }
         } label: {
