@@ -82,8 +82,10 @@ final class StereoRoutingTests: XCTestCase {
         defer { input.deallocate(); output.deallocate() }
         input.initialize(from: [0.25, -0.25, 0.5], count: 3)
         output.initialize(repeating: 9, count: 5)
-        let inList = UnsafeMutableAudioBufferListPointer.allocate(maximumBuffers: 1)
-        let outList = UnsafeMutableAudioBufferListPointer.allocate(maximumBuffers: 1)
+        let inList = AudioBufferList.allocate(maximumBuffers: 1)
+        let outList = AudioBufferList.allocate(maximumBuffers: 1)
+        inList.unsafeMutablePointer.pointee.mNumberBuffers = 1
+        outList.unsafeMutablePointer.pointee.mNumberBuffers = 1
         defer { inList.unsafeMutablePointer.deallocate(); outList.unsafeMutablePointer.deallocate() }
         inList[0] = AudioBuffer(mNumberChannels: 3, mDataByteSize: 12, mData: input)
         outList[0] = AudioBuffer(mNumberChannels: 5, mDataByteSize: 20, mData: output)

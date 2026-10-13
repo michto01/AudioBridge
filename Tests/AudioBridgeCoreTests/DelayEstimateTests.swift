@@ -54,13 +54,13 @@ final class DelayEstimateTests: XCTestCase {
         XCTAssertEqual(value.subtotalMilliseconds(categories: [.deviceReported]) ?? -1, 2347.0 / 48, accuracy: 1e-8)
         XCTAssertEqual(value.totalMilliseconds ?? -1, 2565.0 / 48, accuracy: 1e-8)
     }
-    func testBufferDraftPrefersRealDriverValueAndOtherwise128() {
+    func testBufferDraftPrefersRealDriverValueAndOtherwise64() {
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: 64, range: nil), 64)
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: 96, range: nil), 96)
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: 512, range: nil), 512)
-        XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: nil), 128)
+        XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: nil), 64)
         XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: .init(minimum: 256, maximum: 1024)), 256)
-        XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: .init(minimum: .nan, maximum: 1024)), 128)
+        XCTAssertEqual(BufferFrameChoices.initialRequest(current: nil, range: .init(minimum: .nan, maximum: 1024)), 64)
     }
     func testConservedPendingReplacesOverlappingQueueAndInFlightReports() {
         let value = DelayEstimate(input: nil, output: nil, selection: RouteSelection(), sampleRate: 48000,

@@ -44,6 +44,15 @@ public struct AUChain: Codable, Equatable, Sendable {
 public struct AUListing: Identifiable, Codable, Sendable {
     public let id: AUIdentity
     public let name: String
+    public init(id: AUIdentity, name: String) { self.id = id; self.name = name }
+    /// Match all query words against the registry's vendor/effect display name.
+    /// This reads cached metadata only; searching never instantiates a plugin.
+    public func matchesSearch(_ query: String) -> Bool {
+        let normalizedName = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let words = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: { $0.isWhitespace })
+        return words.allSatisfy { normalizedName.contains($0) }
+    }
 }
 public struct AUCatalogCache: Codable, Sendable {
     public let schemaVersion: Int

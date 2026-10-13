@@ -4,6 +4,9 @@ import SwiftUI
 
 struct AUEffectsView: View {
     @ObservedObject var model: AppModel
+    @State private var effectPickerOpen = false
+    @State private var effectSearch = ""
+    @FocusState private var searchFocused: Bool
     var body: some View {
         InfoGroupBox(L("Audio Unit effects"), message: effectsHelp) {
             VStack(alignment: .leading, spacing: 8) {
@@ -11,9 +14,9 @@ struct AUEffectsView: View {
                     get: { model.effectsProcessingEnabled }, set: { model.setEffectsProcessingEnabled($0) }
                 ))
                 HStack {
-                    Menu(L("Add effect…")) {
-                        ForEach(model.auCatalog) { listing in Button(listing.name) { model.addAU(listing) } }
-                    }.disabled(!model.canEditAU || model.auChain.effects.count >= 8 || model.auCatalog.isEmpty)
+                    Button(L("Add effect…")) { effectSearch = ""; effectPickerOpen = true }
+                        .disabled(!model.canEditAU || model.auChain.effects.count >= 8 || model.auCatalog.isEmpty)
+                        .popover(isPresented: $effectPickerOpen) { effectPicker }
                     Button(LT(model.chainBypassed ? L("Remove bypass") : L("Bypass chain"))) { model.setChainBypassed(!model.chainBypassed) }
                         .disabled(model.routingTransitioning || !model.effectsProcessingEnabled)
                     Button(L("Rescan")) { model.refreshAudioUnits() }.disabled(model.auCatalogLoading)
@@ -53,6 +56,46 @@ struct AUEffectsView: View {
                 if model.auUpdating { Text(L("Preparing live chain update…")).font(.caption) }
             }.padding(4)
         }
+    }
+    private var matchingEffects: [AUListing] {
+        model.auCatalog.filter { $0.matchesSearch(effectSearch) }
+    }
+    private var effectPicker: some View {
+        let matches = matchingEffects
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(L("Add effect…")).font(.headline)
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField(L("Search effects or manufacturers…"), text: $effectSearch)
+                    .textFieldStyle(.roundedBorder).focused($searchFocused)
+                if !effectSearch.isEmpty {
+                    Button { effectSearch = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel(L("Clear search"))
+                }
+            }
+            if matches.isEmpty {
+                Text(L("No matching effects")).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 80)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(matches) { listing in
+                            Button {
+                                effectPickerOpen = false
+                                model.addAU(listing)
+                            } label: {
+                                Text(listing.name).lineLimit(2)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(6)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                                .disabled(!model.canEditAU || model.auChain.effects.count >= 8)
+                        }
+                    }
+                }.frame(height: 280)
+            }
+        }.padding(14).frame(width: 380)
+            .onAppear { searchFocused = true }
+            .onExitCommand { effectPickerOpen = false }
     }
     private var effectsHelp: String {
         let catalog = model.auCatalogScannedAt.map { L("Cached catalog: \(model.auCatalog.count) effects, scanned \($0.formatted(date: .abbreviated, time: .shortened)).") } ?? L("The catalog has not been scanned yet.")

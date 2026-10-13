@@ -1,6 +1,6 @@
 # Audio Bridge — specification and Codex handoff
 
-Status: **0.6.3/build 36 refines Czech audio terminology, consolidates microphone/notification permission controls and avoids redundant meter layout during scrolling. See [translation, permissions and scroll investigation](docs/translation-permissions-scroll-results.md) and [pipeline audit](docs/continuous-dsp-pipeline-results.md). Low-latency, plugin and 12-hour operational gates remain unrun.**
+Status: **0.6.4/build 37 adds searchable effect selection and executes the deferred automated suite. The operator reports clean audio with zero drops/underruns/overruns and acceptable English/Czech UI; device-loss checks are partial. See [prerelease acceptance and effect search](docs/prerelease-search-results.md). The timed 12-hour and broader hardware gates remain separate.**
 
 Audio Bridge is a universal macOS 14+ native SwiftUI menu-bar application that routes audio between independently selected Core Audio input and output devices. Version 1 mixes N explicitly mapped physical inputs into stereo, processes a stereo AU/drift path, and copies L/R to explicitly mapped physical outputs on one selected output device (ADR-002). No Dante, TightAV, ATEM, USB, or vendor-specific integration is required.
 
