@@ -28,4 +28,4 @@ Arbitrary N×M effects, independent per-output-device clocks/recovery, multichan
 
 ## Acceptance
 
-N×2 isolated signals/summation/ramping; mono/stereo defaults; exact physical numbering; multi-stream planar/interleaved addressing; stereo fan-out and Off silence; schema migration/corruption; live coherent publication; status colours with textual accessibility; CPU/latency and sustained drift tests. Tests may be written now but execution remains deferred by the standing user instruction.
+N×2 isolated signals/summation/ramping; mono/stereo defaults; exact physical numbering; multi-stream planar/interleaved addressing; stereo fan-out and Off silence; schema migration/corruption; live coherent publication; status colours with textual accessibility; CPU/latency and sustained drift tests. Component regressions passed in the recorded 0.6.5 suite; physical/long-run acceptance remains separate. See [testing](../testing.md).

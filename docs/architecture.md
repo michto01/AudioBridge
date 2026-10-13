@@ -1,148 +1,74 @@
 # Architecture
 
-Current 0.6.5 audit amendment: each start attempt owns an irreversible lock-free C cancellation gate. Stop cancels all published attempts synchronously; preparation and HAL startup check the gate, and callbacks suppress processing after cancellation. An already executing callback can finish its current work. The engine retains the gate until confirmed destruction; uncertain detach retains callback memory and its gate. Retired Swift attempts are removed during lifecycle teardown, including automatic retries. Swift publication locks never span HAL calls. Driver calls themselves remain potentially blocking.
+## Processing path
 
-The watchdog probes selected UIDs, duplicate identities, liveness, current rates/buffers, stream ordering/layout/current formats and latency without fetching static capability ranges or available formats. Full catalogs remain for setup. Device-volume operations resolve the explicit UID afresh and read/write only the necessary volume properties. Sparse routes use callback-owned preallocated active/ramping channel lists; fade-out remains active until complete and all unpatched output buffers are explicitly zeroed. Coherent 64-bit publication versions skip unchanged targets and reject exhaustion. FIR demand plans retain the original arithmetic and are valid only for their owner, ratio and resampler generation; reset/process invalidates them.
-
-Current continuous-switch amendment: app routes retain the AU helper transport with DSP off, but a dry start loads no plugins. First enable prepares/adopts the saved chain while dry blocks continue. A 20 ms dry/wet ramp precedes DSP suspension. Output starts before capture; callback supervision uses monotonic time. See [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) and [pipeline audit](continuous-dsp-pipeline-results.md).
-
-Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
-
-
-## User-authorized Audio Unit extension
-
-Installed AU effects are hosted by a separate SwiftPM helper, connected to HAL capture/output through preallocated shared-memory queues. N×2 physical input mixing and input trim precede the chain; stereo adaptive drift processing and output gain follow it, then physical output fan-out (ADR-002). The UI persists exact AU component identities and state, with explicit bypass only. Plugin setup/editing stays outside HAL callbacks. Failed/stalled helpers detach the engine; typed recoverable failures retry with bounded backoff while explicit render/configuration failures require action. Hardware acceptance remains pending. See [Phase 4 evidence](phase-4-results.md).
-
-## Logical components
-
-```
-SwiftUI MenuBarExtra / Settings Window
-                │ snapshots + commands (main actor)
-                ▼
-AppCoordinator ─ SettingsStore ─ LoginItemManager
-                │
-                ▼
-BridgeSupervisor (serialized state machine)
-                │                 └─ DiagnosticsService / OSLog
-                ▼
-CoreAudioDeviceManager (UID discovery, property listeners, format probe)
-                │
-                ▼
-AudioBridgeEngine
-  Input HAL → Float32 addressing → N×2 input mix → input trim
-                                                   ↓
-                              bounded stereo capture queue → stereo AU helper
-                                                   ↓
-                              bounded stereo output queue → adaptive drift FIR
-                                                   ↓
-                              output gain → physical L/R fan-out → Output HAL
-                                                   ↓
-                              one explicitly selected output UID
+```text
+Selected input UID / physical channels
+  → HAL capture → N×2 mix → input trim
+  → bounded stereo capture queue
+  → dedicated AU helper (effects or dry forwarding)
+  → bounded stereo ready queue
+  → adaptive drift FIR → output gain
+  → physical L/R/explicit L+R fan-out → HAL output
+Selected output UID
 ```
 
-The diagram is conceptual: precise order of format conversion, resampling and matrix depends on supported stream formats. Do not copy/allocate/lock in real-time callbacks; preallocate conversion buffers and initialize converters outside the callback.
+One selected device per direction, one stereo effects/drift path. Current formats/rates and stream/buffer topology are validated before registration. Unsupported or ambiguous layouts fail explicitly. See [endpoint contract](device-compatibility.md) and [ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md).
 
-## Interfaces and responsibilities
+## Modules
 
-- `AudioDeviceCatalog`: enumerate input/output devices, UIDs, names, channel capabilities, sample rates, buffer ranges, liveness, and property changes. Treat runtime `AudioDeviceID` as ephemeral.
-- `BridgeConfiguration`: versioned, codable settings: selected UIDs, versioned physical input/output patches, gain, latency profile, desired routing, login option and diagnostics options. Validate before committing.
-- `BridgeSupervisor`: serialized commands `start`, `stop`, `reconfigure`, `deviceChanged`, `engineFault`, `retry`; publishes immutable `BridgeSnapshot` for UI.
-- `AudioBridgeEngine`: `prepare(config, devices)`, `start`, `stop`, `teardown`, diagnostics snapshots. No SwiftUI references.
-- `AudioProcessor`: pure testable matrix/gain DSP, resampler and ring-buffer primitives.
-- `DiagnosticsService`: structured events, rate-limited error reporting, cumulative glitch counters, optional diagnostic export.
+| Target | Responsibility |
+|---|---|
+| AudioBridge | SwiftUI, AppModel orchestration, settings/login/permissions and remote listeners |
+| AudioBridgeCore | Device/route models, persistence/migration, readiness/recovery policy, diagnostics and remote parsing |
+| AudioBridgeDiscovery | Core Audio catalogs, UID resolution and property operations |
+| AudioBridgeRealtime | Preallocated C callbacks, routing/gain/FIR/drift, queues, cancellation gates and AU transport |
+| AudioBridgeEngine | Serial lifecycle, supervision, helper hosting and immutable telemetry |
+| AudioBridgeAU | AU identities, chains, state serialization and helper protocol models |
+| AudioBridgeAUWorker / AUViews | Plugin preparation, rendering, editor UI and legacy Cocoa integration in the helper |
+| AudioBridgeStrings | English/Czech resources |
+| AudioBridgeProbe | Read-only device/permission-context CLI |
 
-## State machine
+No external Swift package dependency. SwiftPM is canonical; host/helper executables and resources ship together.
 
-Current implementation uses pure `RecoveryPolicy` for desired state, blocked state and monotonic retry deadlines. AppModel serializes orchestration on the main actor, with attempt generations rejecting late completion/snapshot work. AudioBridgeEngine retains its independent serial lifecycle queue. Main-actor retry tasks never enter HAL callbacks. ServiceManagement registration happens only after explicit interaction with General's login toggle.
+## Ownership and lifecycle
 
-`stopped` (manual), `waitingForInput`, `waitingForOutput`, `preparing`, `running`, `degraded`, `recovering`, `faulted` (unrecoverable configuration or permission). Model desired state separately from observed state. Both devices absent must be represented unambiguously in a diagnostic reason.
+AppModel orchestrates on MainActor with generations rejecting stale route updates. RecoveryPolicy separates desired routing from observed delivery and uses monotonic retry deadlines. AudioBridgeEngine owns a serial lifecycle queue independent of UI windows. Property listeners enqueue events; they never rebuild resources inside HAL callbacks.
 
-- Start requested: resolve both UIDs; missing device → wait; permission denied → actionable fault; devices present → prepare/start.
-- Device disappears, changes identity/format/buffer or stops callbacks: detach safely, latch stopped intent and require explicit local re-arming (ADR-003); never substitute another UID.
-- Reappearance: re-query capabilities and rebuild from scratch if necessary.
-- Recoverable error: retry 1, 2, 4, 8, 16, 30, 30… seconds (with notification-driven immediate recheck); never busy-loop.
-- Manual Stop: clear desired routing, cancel scheduled retries and prevent reconnection-triggered restart. Persist preference before acknowledging Stop.
-- Reconfiguration: serialize transitions; avoid competing device callbacks and configuration changes; validate and apply atomically or restore last valid settings.
-- Distinguish fatal configuration/permission errors (require operator action) from recoverable hardware failures (retry indefinitely). Do not endlessly retry permission prompts.
+Each start publishes an irreversible atomic C cancellation gate before preparation. Stop cancels published attempts synchronously without holding a Swift lock across HAL calls. Preparation and HAL start check the gate; callbacks check it before processing. An already executing callback can finish. The C engine retains the gate until confirmed destroy, including retained memory after uncertain detach. Lifecycle teardown retires Swift attempts, preventing retry-history accumulation.
 
-## Real-time design
+Stop disables delivery, stops/detaches IOProcs and checks in-flight quiescence before freeing buffers. Unsafe detach retains context/mapping and requires process restart. A driver Stop error after confirmed detach is reported separately. Driver Stop/destroy calls themselves can block; a callback drain timeout does not bound them. Device loss/change/stall persists the local re-arm latch ([ADR-003](decisions/ADR-003-reliability-and-operator-setup.md)).
 
-Two independent clock domains require an elastic buffer and resampling or equivalent drift correction. A simple FIFO alone is insufficient for indefinite operation. Use preallocated single-producer/single-consumer ring storage, clear memory ordering, explicit underrun/overrun behavior and no hidden allocations in callbacks. Prefer C/C++ or carefully audited Swift for callback-critical structures if ARC/Swift exclusivity/runtime behavior complicates hard real-time guarantees; keep app orchestration in Swift.
+## Callback invariants
 
-- Input callback: address validated physical streams, mix N inputs into stereo and apply trim before FIFO; update lock-free counters; never block on output.
-- Output callback: consume/resample to requested output frame count; apply output gain and physical stereo fan-out; output silence on starvation; no UI calls.
-- Drift controller: track smoothed FIFO occupancy vs target, bound resampling correction (ppm limit to be tuned), detect outliers and perform controlled re-centering when necessary.
-- Channel layout: N×2 input mix, stereo processing and output fan-out per ADR-002; validate actual stream order/buffers and preserve physical indices. Integer PCM and same-device duplex remain pending.
-- Formats: support common Core Audio float/int PCM and planar/interleaved layouts through a tested conversion layer; do not assume `Float32` non-interleaved on every device.
-- Metering: peak or peak+RMS accumulated in callback-safe structures, polled by UI at a modest rate (e.g. 10–20 Hz); report dBFS and clipping counts. Meters reflect local samples, not reception at downstream hardware.
-- Gain/matrix updates: smooth ramps at audio rate to avoid clicks; define coefficient range and clipping policy.
-- Avoid creating an aggregate device as an invisible dependency; if an aggregate-device approach is considered, benchmark it and document persistence and drift-compensation implications.
+- C callbacks use preallocated storage, lock-free atomics and bounded processing. No ARC/SwiftUI, allocation, logging, actor waits, property queries, plugin calls or blocking waits.
+- Input addresses validated physical streams, sums the stereo mix, applies smooth trim, publishes samples then queue indices and updates counters.
+- Output consumes/resamples exact source demand, applies output gain/fan-out and clears unpatched output buffers. Starvation produces counted zero-fill, never fabricated audio.
+- Sparse routes retain active/ramping channel indices through fade-out. Coherent 64-bit publication versions skip unchanged targets; exhaustion is rejected before publication. Control updates have one writer.
+- FIR plans reuse original demand arithmetic, validated by owner/state generation; reset/process invalidates plans and ratio/recenter changes rebuild them. History survives short reads; filtering remains active at unity.
 
-## Latency
+## Queues, clocks and rendering
 
-Build 32's helper sleeps on a precreated named semaphore until a full capture
-block and output space are available, with arm/recheck fences and a coalesced
-publication signal. Capture/output callbacks only issue a non-waiting `sem_post`
-when an armed worker can proceed; semaphore creation, waiting and destruction
-are outside callbacks. A kernel notification has overhead; this is not a claim
-that arbitrary system calls are cost-free or bounded by an audio deadline.
-Shutdown wakes an armed helper. Wake telemetry measures signal-to-resume delay,
-excluding normal time waiting for capture/space. The shared protocol is version
-8; app and helper must come from the same bundle. Separate complete worker-cycle
-timing includes renderer adoption, foreign context hooks and processing pool
-drain, excludes idle waiting, and is not added to signal latency. These counters
-are run totals and do not reset with the operator's diagnostic observation
-baseline. Existing DSP block timing remains separate.
+Each shared queue has one producer/consumer. Release/acquire index publication follows sample writes; paired sequentially consistent arm/recheck fences prevent missed worker wakes. A precreated named semaphore coalesces readiness signals. HAL callbacks only signal an armed worker when it can proceed; waiting/resource creation happen outside callbacks. Shutdown wakes an armed worker.
 
-The dedicated helper render thread requests `THREAD_TIME_CONSTRAINT_POLICY`
-using its block duration as period/constraint and half that duration as nominal
-computation. Diagnostics reports the setup Mach result; failed requests retain
-QoS scheduling. This is a soft scheduling request, not continuous policy
-verification, audio workgroup membership or a deadline guarantee. Readiness is
-published by the render thread after policy setup, before parent HAL startup.
+The helper render thread requests Mach time-constraint scheduling and owns an asynchronous AudioWorkInterval workgroup; it does not join either independently clocked device's parallel workgroup. Setup/interval errors are reported with fallback. Accepted setup is not a sustained scheduling or deadline guarantee. Cached render-context observers receive the helper context on the render thread.
 
-Renderer swaps use a lock-free borrowed-pointer mailbox. The helper main thread
-retains both old and prepared replacement owners until adoption is acknowledged
-between completed render blocks. It then releases the retired chain on the main
-thread, keeping AU render-resource teardown off the render thread. One live
-command remains outstanding until adoption; no unbounded retired-chain list.
+AU render/pull blocks are cached after resource allocation. A borrowed-pointer mailbox adopts prepared replacements between blocks. Helper main retains old/new owners until acknowledgment, then retires the old chain off the render thread. Per-block autorelease pools bound temporary legacy-plugin objects. Plugin properties/setup/editor work stay off HAL; third-party locks/auxiliary threads remain outside host control. See [ADR-004](decisions/ADR-004-audio-unit-hosting.md).
 
-The resampler fetches its exact callback demand into preallocated scratch once,
-instead of reading/publishing the source queue for each sample. Mirrored FIR
-history removes circular indexing from the inner convolution loop. Filter,
-phase/demand calculation, short-read history and drift tuning are preserved;
-numerical, wrap, starvation and lifecycle acceptance remain pending.
+All app routes retain the helper transport, including DSP off. A dry start loads no saved effects; enabling prepares/adopts them while forwarding dry audio. Dry/wet changes use a 20 ms ramp. DSP off suspends render calls after fade-out; bypass keeps rendering. No queue flush or HAL restart is used for the switch. Dry/wet latency is not aligned and transitions are not guaranteed inaudible.
 
-Report measured or estimated components separately: input device, input buffer, FIFO target, resampler, output buffer and output device. Profiles adjust safety margin rather than promising fixed end-to-end milliseconds. Default Balanced; measured round-trip/one-way signal latency requires physical loopback measurement.
+Equal nominal rates can still have clock skew. Bounded adaptive FIR consumption follows filtered occupancy with anti-windup/refill handling; measured timestamp clock difference, commanded correction and applied correction are distinct. Pending source uses accepted capture minus consumed/discarded frames, avoiding in-flight double counting. Reserve is occupied-audio target; allocated capacity is headroom, not extra delay. See [ADR-005](decisions/ADR-005-realtime-health-and-observability.md).
 
-## Concurrency
+## Discovery and telemetry
 
-Supervisor and configuration changes execute on a single serialized actor/queue; Core Audio property listeners enqueue events only. Audio callbacks never await actors, acquire locks, access settings storage, log synchronously, allocate or trigger SwiftUI updates. Teardown must guarantee callback lifetime safety before freeing buffers; test stop/restart races under sanitizers where feasible.
+Full catalogs serve setup. The 0.5-second watchdog checks selected UID uniqueness/liveness, runtime identity, current rate/buffer, stream order/layout/current formats and latency without static capability lists, names or icons. Volume operations resolve the selected UID afresh and query necessary properties only.
 
-## Device permissions and app lifecycle
+Health/command supervision runs at 20 Hz; normal informational snapshots publish at 5 Hz, with fault/state/command transitions immediate. Native Core Animation meters quantize targets to whole dB without SwiftUI redraws at display refresh rate. Dynamic delay is averaged over five seconds; detailed snapshots remain available.
 
-Include `NSMicrophoneUsageDescription` for capture, test TCC authorization with the packaged bundle, and ensure `LSUIElement`/menu-bar behavior is correct. `SMAppService` login-item registration must be verified from a real signed app at a stable installation path. Do not assume direct `swift run` reproduces app-bundle behavior.
+Protocol **8** validates app/helper shared-memory compatibility. DSP block timing, wake delay, per-plugin timing and complete worker-cycle/adoption timing are separate. Complete cycles include adoption/context hooks and pool drain, exclude idle waiting, and are run totals unaffected by Reset counters. None is added as signal latency. Per-plugin totals reset with slot-instance adoption; their means cannot simply be summed across differing windows.
 
-## Remote control and reporting
+## Remote and permissions
 
-Opt-in HTTP/OSC listeners use Apple's Network framework; no third-party package is needed. HTTP exposes a JSON status snapshot and a small command set (Start, Stop, input/output gain, chain bypass) behind a random Keychain bearer token. OSC uses standard UDP messages, accepts commands only from explicitly allowlisted source IPs, and reports status/meters to a configured Companion host/port once per second. Listeners default off. HTTP is plain-text and intended only for a trusted local production network; bearer tokens are not protected from network sniffing. UDP OSC has no protocol authentication. No audio samples or plugin state are sent. See `docs/remote-control.md`.
+Independent HTTP/OSC generations invalidate before listener/accepted-connection cancellation. Acceptance, dispatch, status and feedback ticks reject stale generations; dispatch is serialized on MainActor. Shared parsers enforce bounded HTTP frames and exact OSC tags/count/length with distinct Int32/Float decoding. [ADR-006](decisions/ADR-006-remote-control.md) and the [wire reference](remote-control.md) define access limits.
 
-Each service has an independent generation. Shutdown invalidates it before cancelling listeners and all tracked accepted connections; acceptance, receive/dispatch and status callbacks reject previous generations. Feedback timer callbacks also reject stale feedback generations. Parsers live in AudioBridgeCore for deterministic testing; OSC commands require exact tags, argument count and packet length, with signed big-endian integers distinct from IEEE floating-point gain values.
-
-Live editor completion clears editor ownership and finishes exactly once, including invalid or oversized state serialization. Failed saving retains the previous saved state and reports an error without stopping audio; parameter changes already made live are not rolled back.
-
-## Hardware probe before implementation lock
-
-Create a small CLI tool or diagnostics screen that lists UIDs, transport types, stream/channel formats, nominal rates, supported buffers and permission status for all eligible Core Audio devices. Validate using at least built-in and independent external or virtual endpoints. Use findings to select exact HAL API surface. Do not claim a specific callback or AudioConverter configuration is supported without validating against the macOS SDK and hardware.
-
-## Universal device contract (normative)
-
-- The product is a **Core Audio PCM device bridge**, not a Dante or USB adapter utility. No device brand, model, transport, or downstream mixer is a required dependency.
-- Enumerate all available input-capable and output-capable Core Audio endpoints. Persist each selected endpoint by stable device UID; never bind to transient `AudioDeviceID` or display name.
-- At runtime probe stream availability, channel count, channel layout, sample rate, sample representation, buffer size and liveness. Reject unsupported or non-PCM formats with an actionable reason; never silently choose a different endpoint.
-- V1 uses N×2 physical input mixing, stereo AU/drift processing and L/R fan-out within one selected output device. ADR-002 supersedes the old 2×2 lane restriction. Explicit patches and actual stream/buffer topology are validated; unsupported layouts are rejected without defaults.
-- Input and output may be independently clocked, even at the same nominal sample rate. Use bounded buffering and adaptive conversion; do not assume a shared USB clock.
-- Built-in, USB, Thunderbolt and virtual devices are first-class discovery targets. Bluetooth, AirPlay, aggregate and unusual virtual devices are best-effort until validated for latency, liveness and format behavior.
-- The initial hardware validation example is a class-compliant TightAV Dante USB 2×2 feeding a Mac 3.5 mm output and ATEM Mini. This is **non-normative**; no vendor-specific branches are permitted for that example.
-
-See `device-compatibility.md` and `decisions/ADR-001-universal-core-audio.md`.
+Microphone capture uses packaged-app TCC identity; CLI authorization is not app authorization. Notifications and Local Network access are separate. SMAppService login registration is opt-in at a stable app path. UI closure does not own or stop the engine. [ADR-007](decisions/ADR-007-build-and-distribution.md) records packaging/identity choices.

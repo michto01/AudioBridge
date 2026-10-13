@@ -1,59 +1,39 @@
-# Overview — Audio Bridge
+# Product contract
 
-Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+Audio Bridge is a native macOS 14+ menu-bar utility for live-production audio routing in an active user session. Its aim is predictable, low-latency operation over long runs; unattended-readiness acceptance remains open.
 
-
-## Problem
-
-Audio Bridge is a universal native macOS utility for unattended routing between independently selected Core Audio input and output devices, which may use different hardware clocks. Version 1 supports N physical inputs mixed into stereo, a stereo AU/drift path and L/R fan-out within one selected output device (ADR-002). Built-in, USB, Thunderbolt, and virtual PCM devices are eligible based on capabilities; no hardware brand or transport is required.
-
-## Product outcome
-
-A small, reliable, native macOS menu-bar utility with no cloud dependency and no general-purpose mixing-console complexity. It must show whether routing is configured, running, degraded, waiting or deliberately stopped, and it must restore service automatically after recoverable device failures.
-
-## Locked requirements
+## Invariants
 
 | ID | Requirement |
 |---|---|
-| P-01 | macOS 14+ native SwiftUI, Apple Silicon primary; Intel support desirable if CI supports it. |
-| P-02 | Separate Core Audio input and output selection, persisted by device UID. |
-| P-03 | Never substitute a missing device with the system default. |
-| P-04 | Auto-launch at user login and auto-start when configured devices are available. |
-| P-05 | Manual Stop suppresses recovery and auto-start until user explicitly starts again; persistence across app relaunch is specified in design. |
-| P-06 | Recover indefinitely from recoverable device loss with bounded retry intervals. |
-| P-07 | N×2 input matrix with mono/stereo defaults and smooth changes; stereo processing and physical output fan-out (ADR-002). |
-| P-08 | Output gain, input/output peak meters and clipping/overrun/underrun counters. |
-| P-09 | No silence alerts or notifications; silence is an informational meter condition only. |
-| P-10 | Menu-bar popover and separate settings window; closing windows does not stop routing. |
-| P-11 | Preferred 48 kHz, device format negotiation and independent clock compensation. |
-| P-12 | CLI-first build via SwiftPM and Makefile; package a real `.app`. |
-| P-13 | Free self-managed GitHub distribution via ad-hoc signing; notarization optional later. |
+| P-01 | Native SwiftUI MenuBarExtra and separate Settings; engine lifetime independent of UI |
+| P-02 | Explicit input/output by Core Audio UID and physical-channel index |
+| P-03 | Never substitute system defaults or alternate devices/channels |
+| P-04 | Optional login launch and launch resume after explicit configuration; neither starts capture by default |
+| P-05 | Manual Stop persists and overrides retries/resume |
+| P-06 | Device loss/identity/topology/rate/buffer changes or confirmed callback stalls stop and require local re-arm; other recoverable failures retry with capped backoff |
+| P-07 | N×2 input mix, stereo AU/drift path and L/R/explicit mono output fan-out on one output UID |
+| P-08 | Smooth gain, measured stereo meters, clipping/loss diagnostics and explicit output-level control |
+| P-09 | No silence notifications; clipping is a signal condition, not delivery failure |
+| P-10 | Independent clocks require actual adaptive resampling; FIFO alone is insufficient |
+| P-11 | Prefer 48 kHz, validate real device capabilities and apply hardware changes explicitly |
+| P-12 | SwiftPM/Makefile builds and a real `.app`; no Xcode project |
+| P-13 | English/Czech operator UI, with supplied device/plugin text retained |
 
-## Non-goals for v1
+## Scope and limits
 
-Built-in EQ, compressor, limiter (installed AU hosting is explicitly authorized), audio recording, network-audio protocol stacks, vendor-specific device APIs, arbitrary multichannel effects or independently opened multiple output devices, remote control, unattended system-daemon operation, automatic switching to alternate outputs, and a paid signing dependency.
+Current IO requires distinct UIDs, matching current nominal/stream rates and validated native packed Float32 planar/interleaved stream layouts. Same-device duplex, arbitrary nominal-rate conversion and integer PCM remain future backend work. Operator-configured aggregates are best effort; no invisible aggregate is created. Device brand or transport is never a required dependency; TightAV/ATEM is only a hardware test example.
+
+Installed stereo AU effects and optional HTTP/OSC status/control are accepted extensions. No built-in EQ/compressor, VST hosting, recording, network audio transport, cloud service, per-app system-audio capture, multichannel effect chain or independently opened multiple outputs is included.
 
 ## Operating constraints
 
-- The application runs in an active macOS user session. It is not guaranteed to run at the login screen or across system reboot without login.
-- A green status indicates healthy local callbacks and buffer state, **not** upstream signal delivery or downstream device reception.
-- External analog equipment requires separate input-sensitivity and output-level calibration; the bridge does not control downstream equipment.
-- An application cannot guarantee audio continuity across host sleep, system restart, USB hardware failure or power loss. A dedicated hardware signal path may be more fault-tolerant when absolute continuity is required.
+- Running/green confirms local callback freshness and primed delivery, not upstream signal or downstream reception.
+- Hardware/software faults, sleep, restart and power loss can interrupt audio. Driver and third-party plugin calls can block; no hard deadline guarantee is offered.
+- External analog sensitivity and safe monitoring levels belong to the operator. Mixing/gain can clip; there is no hidden limiter or normalization.
+- Ad-hoc development signing is not notarization or a stable Developer ID identity. Login registration needs a stable installation path.
+- Compatibility, physical latency and reliability require tests on the stated devices/plugins. A short clean run is not a 12-hour acceptance result.
 
-## Product success criteria
+## Success criteria
 
-- Operator can configure devices and matrix once and thereafter run with no UI interaction.
-- Correct channel routing, no sustained drift or buffer growth, bounded audio latency, and no unhandled failures in an extended test.
-- Recover after unplug/replug of either device without accidentally switching to other audio hardware.
-- Full installation, launch, permission, login and recovery workflows tested from the packaged `.app` (not only `swift run`).
-
-## Open decisions
-
-- Exact matrix coefficient range and normalization/headroom policy: 0.0–2.0 per coefficient, 1.0 is unity (legacy duplicate-input sums may exceed 1), with optional future signed/negative coefficients. Explicit mono/stereo presets.
-- Positive digital gain: provisionally cap at +12 dB; protect against clipping through indication, not a hidden limiter.
-- Latency profiles: Low, Balanced (default), Robust; exact buffer sizes determined by device measurements.
-- User-initiated Stop: recommended persisted `desiredRouting=false` across relaunch; explicit auto-start preference is only applied on first setup or when desired state is enabled. Document and test this carefully.
-
-## Product boundary
-
-The app works with compatible Core Audio PCM input/output devices regardless of their transport or brand. TightAV Dante USB to Mac headphones to ATEM Mini is a validation scenario, not a product dependency. See `device-compatibility.md`.
+Configure explicit devices and patches once; preserve them across relaunch; maintain bounded queues/drift/CPU/memory; report actionable faults; never route to an unintended output; meet the [hardware and soak gates](testing.md). Accepted choices and supersession are recorded in [ADRs](decisions/README.md).

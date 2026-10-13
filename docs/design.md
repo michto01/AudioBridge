@@ -1,98 +1,54 @@
-# Design / UX specification
-
-Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
-
+# Interface and operator behavior
 
 ## Visual direction
 
-Native macOS controls, compact spacing, restrained status colors, no dashboard clutter. Use system materials and SF Symbols. Follow system light/dark appearance and accessibility settings. Status must not be color-only.
+Native macOS controls, system light/dark materials, bounded SF/driver icons and restrained status colors with text/accessibility alternatives. Settings groups use bold headings and `(i)` explanations; technical details belong in Diagnostics. Driver images are rasterized to font-size bounds for native pickers; larger device cards request explicit sizes.
 
-Group titles use a larger bold heading above the controls. Each settings group has an `(i)` button for explanations, limitations and detailed state; long notes do not occupy the main control surface. Keep the single Bridge status badge and one listener status per Remote group visible. Current delivery-warning causes remain directly readable in Diagnostics. Info popovers allow text selection and scroll within a bounded height.
+## Menu popover
 
-Bridge device icons explicitly fit a 42-point square; device pickers retain compact icons. The endpoint layout measures both cards at the same column width, uses the larger intrinsic height for both and aligns their tops and bottoms. Device-volume or fallback-gain controls contribute to the measured height rather than a fixed empty-space allowance. Headers, meters and trim rows align between the cards.
+Prominent app icon/title/subtitle, compact status with explanation and runtime, matching rounded read-only input/output cards and a downward flow link. Current stereo meters span each card; live CLIP overlays the menu meter without an empty trailing column. A separate output-device volume row and footer provide one Start/Stop/re-arm button, one Settings action and Quit. Native MenuBarExtra owns the outer surface/corners. Device selection and digital trims stay in Settings.
 
-Diagnostics groups delivery, queues/clocks, Audio Unit timing, signal levels and recovery into labeled value rows. Copy Status has the same distinct report sections. Keep device catalog and session history expandable instead of interleaving technical paragraphs with controls.
+Device names allow two lines at equal heights; menu names use 15-point semibold text. The Czech compact volume label is Hlasitost. Missing/unconfigured devices are explicit. Settings focuses/restores the actual native Settings window; closing it never stops routing.
 
-## Menu-bar popover (primary)
+## Settings tabs
 
-```
-┌──────────────────────────────────────────┐
-│ ◉ Audio Bridge                  ● Running │
-│                                          │
-│ INPUT   Selected Core Audio Input       48 kHz 2ch │
-│ L ███████░░░  -12 dB                    │
-│ R ██████░░░░  -16 dB                    │
-│                                          │
-│ OUTPUT  Mac Headphones        48 kHz 2ch │
-│ L ██████░░░░  -13 dB                    │
-│ R █████░░░░░  -17 dB                    │
-│                                          │
-│ Output device volume ────●──    70%     │
-│                                          │
-│ ✓ Running    [Stop]   [Settings…]       │
-└──────────────────────────────────────────┘
-```
+| Tab | Controls |
+|---|---|
+| Bridge | Status/runtime, matched device cards, meters/input trim, output volume or fallback gain, delay and Start/Stop/re-arm |
+| Audio | Explicit devices, Simple/Expert settings, interface buffer/rate drafts, FIFO reserve, AU block and exclusive access |
+| Routing | Physical input rows × Mix L/R and physical output rows × Mix L/R; explicit presets |
+| Effects | Searchable cached installed AU list, chain order, editors, DSP switch and chain bypass |
+| General | English/Czech, microphone/notification permissions, login/resume and optional tab visibility |
+| Remote | One switch/status per HTTP/OSC service and endpoint/access help |
+| Diagnostics | Warning reason, delivery/clock/queue/AU/signal/recovery sections, Reset counters, Copy Status and device export |
+| About | Quick-start and settings guide |
 
-The 0.7 menu popover follows the operator's visual reference: prominent app icon/title/subtitle and colored status with runtime at the top, matched rounded input/output cards with explicitly scaled device icons, a downward signal-flow link, a separate output-device volume row and a footer with one two-state Start/Stop action, one Settings action and Quit. Endpoint names are read-only; selections remain in Settings → Audio. System materials and semantic colors adapt to light/dark appearance. Status reasons stay behind the header info button. Digital trim controls remain in the main Bridge settings window. Existing meters keep whole-dB labels, visible clipping flags, and explicit inactive/unknown state. Static prototype meter values must never ship as production data. See [0.7 results](menu-0.7-results.md).
+Bridge cards measure at equal column widths and use the larger intrinsic height for both. Channel/rate metadata sits beneath the device name. Clicking the header selects Audio configuration. No fixed empty card-height allowance.
 
-## Settings window
+## Routing and levels
 
-Tabs or sections: `Bridge` (Start/Stop, runtime, equal input/output endpoint cards, linked trim sliders and delay); `Audio` (devices, actual format, interface buffer drafts and separate FIFO reserve); `Routing` (input mix grid, presets, output patches); `Effects` (AU chain); `General` (permissions, launch/resume, tab visibility); optional `Remote` (HTTP/OSC endpoints and independent status); optional `Diagnostics` (technical state, device identities, counters, Copy status/export); `About` (quick-start and settings guide).
+Input cells toggle unity; right-click sets linear coefficient 0–2. Mono/stereo presets apply explicitly to displayed physical indices. Multiple inputs sum without normalization. Output rows choose Off, L, R or explicit L+R; one side can feed multiple outputs. Missing saved patches remain actionable; changing a device clears only its direction's patches while stopped. UID/physical indices are never renumbered by the UI ([ADR-002](decisions/ADR-002-stereo-mix-and-fanout.md)).
 
-### Routing grid (ADR-002)
+Input meters show the trimmed stereo mix before effects. Output meters show stereo after effects/drift/gain, upstream of device volume. Values use whole dB relative to digital full scale; inactivity is explicit. CLIP holds briefly; raw capture full-scale and physical output summation counts remain distinguishable. Digital attenuation cannot repair clipped capture.
 
-A Routing tab shows the selected input device name above a grid: physical input rows × Mix L/Mix R columns. Each cell toggles a connection (unity when enabled); right-click exposes exact linear gain and a slider, 0–2. One input to both sides is mono duplication; multiple inputs can sum to either side. Mono and Stereo preset buttons use the first displayed physical indices only after an explicit press. For each side, `mixSide = sum(input[channel] * cellGain)`; no hidden normalization.
+Input trim persists and ramps over 20 ms. Output uses writable device volume first; digital gain is held at unity in that mode and the saved fallback remains available for other devices. Devices without writable master volume use −60 to +12 dB digital gain in Bridge. The menu exposes hardware volume only. Capability checks preserve the current mode until readback, and Start waits while pending. Volume may affect other clients and quantize to hardware steps; remote digital gain is rejected when device volume is available/checking ([ADR-008](decisions/ADR-008-output-level-and-device-access.md)).
 
-A second grid shows selected output name with physical output rows × Mix L/Mix R columns (after processing). Select one side per output; multiple outputs can take the same side. Right-click explicitly selects mono L+R (clipping risk) or disconnect. Missing saved channels remain labelled with an explicit Remove patch action. Changing devices clears only that direction's patches, requires Stop and never substitutes defaults. Patches and cell gains change live with 20 ms ramps.
+## Buffers and effects
 
-Stereo input meters show the mixed/trimmed bus before effects; output meters show stereo after effects/drift/gain. Physical input full-scale counts and physical output summation counts are separate diagnostics. Native names and physical indices stay in the product UI; technical UIDs remain in Diagnostics/Copy status. Original 2×2 settings migrate with a backup; the matrix moves ahead of effects, requiring listening acceptance.
+Simple requests one shared rate/hardware buffer while stopped; both driver readbacks must match. Switching mode alone writes nothing. Expert drafts start from current reported values, with 64 frames only as fallback, and retain independent device buffers, reserve and AU choices. Driver ranges do not promise arbitrary values. Common presets plus custom requests expose rejection/readback explicitly; zero buffers are unsupported.
 
-Menu-bar waveform status: grey idle/unconfigured; green fresh healthy local callbacks/primed buffers; amber startup/rebuffering/degraded; red actionable fault. After actual delivery loss, amber clears after five continuously healthy seconds; new underruns, overruns, format faults or callback gaps restart the window. Diagnostics names the current warning cause and clean-time progress. Queue recentering and rebuffer bookkeeping alone do not count as lost frames. Cumulative counters remain in Diagnostics. Clipping and silence do not enter delivery health. Colour is accompanied by popover text and an accessibility label. No signal/silence-based alarm or automatic recovery is implied. Copy status copies relevant plain-text diagnostics without audio or saved plugin state.
+Balanced FIFO reserve is `max(64, 2 × larger current device buffer)`. Capacity is separate headroom with a 1024-frame minimum, not added occupied delay. Automatic AU blocks try half the larger device buffer, rounded down to a power of two within 16–256 and constrained by reserve. Expert can request 16–1024 powers of two within reserve. All changes take effect at the appropriate stopped Apply/next Start, with no silent hardware writes.
 
-### Gain
+AU search matches cached display names, case/accent-insensitive and all query words. Initial/manual metadata scans run in a separate helper with progress; cached results remain usable. Loading still validates availability. Live editors control the rendering instance; Close and save persists state without Cancel rollback. Stopped editors use a separate instance with Save/Cancel. Close an editor before chain changes/Stop if state must be saved. Serialization failure completes once with an error and keeps previous saved state, without undoing parameters already changed live.
 
-Digital output gain is a fallback for devices without writable volume: -60 to +12 dB; 0 dB default; smooth changes. Writable device volume is the primary output level control, and digital gain stays at 0 dB in that mode. Device volume is changed only through explicit user control. External analog destinations must be calibrated separately.
+DSP off fades to dry then suspends plugin rendering; bypass keeps rendering for editor feedback. Both keep loaded units editable. First enable after a dry start loads/adopts the saved chain while audio continues. No latency alignment or guaranteed click-free transition. See [ADR-004](decisions/ADR-004-audio-unit-hosting.md).
 
-## Status vocabulary
+## Status, diagnostics and accessibility
 
-Settings tabs: **Bridge** holds the two-state Start/Stop control, runtime, stereo meters/linked trim sliders and delay; **Audio** holds UID device selection and driver buffer drafts, with bridge FIFO clearly separate; **Routing** holds patch grids; **Effects** holds AU controls. General holds permission and tab visibility. Copy status is available in Diagnostics only. Delay is a five-second rolling average for dynamic bridge terms; detailed current snapshots remain available in Diagnostics. Device buffer drafts start at 64 frames when within the reported range, never write until explicit Apply while stopped, and show readback. FIFO Balanced defaults to `max(64, 2 × larger current device buffer)` and applies next Start.
+Grey means idle/stopped/unconfigured; green requires fresh callbacks/priming/delivery; amber means startup or recent delivery loss; red means action required. Five continuously healthy seconds clear a display warning only. Actual frame losses/format faults and later callback gaps restart the window. Rebuffer bookkeeping/occupancy alone are not proof of loss or recovery; actual recenter discards remain counted. Silence and clipping do not affect delivery health. Diagnostics states the reason directly. Supervisor backoff reset uses a separate 20-second healthy window.
 
-- **Stopped** — operator disabled routing; no retry.
-- **Waiting for input/output** — selected UID missing; automatic retry active.
-- **Starting** — opening and configuring devices.
-- **Running** — engine callbacks healthy and buffer in acceptable range.
-- **Degraded** — sustained glitches, FIFO instability or abnormal callbacks; local audio may be impaired.
-- **Recovering** — stopping/restarting after a device or engine fault.
-- **Action required** — permission denied or invalid configuration.
+Device loss/change/stall persists stopped intent and local re-arm confirmation; reconnect/relaunch/remote Start cannot clear it. Manual Stop suppresses retries/resume. Permissions require explicit interaction; denied notification permission does not hide in-app faults. System-audio capture is marked unused. Login/resume are independent opt-ins ([ADR-003](decisions/ADR-003-reliability-and-operator-setup.md)).
 
-Do not conflate silence with device failure. No silence notifications. Technical failure notifications should be rate-limited and optionally disabled.
+Show debug information defaults off at launch. It reveals optional queue/drift/timing/accounting in normal views; Diagnostics/Copy Status always retain technical detail. Reset counters takes an observation baseline without changing queues, drift, warnings or engine totals. Maxima, slot timing and complete-cycle counters remain labeled run totals. Delay is an accounting estimate, not physical loopback; missing reports remain Unknown.
 
-General groups microphone and notification permissions, their System Settings shortcuts and the device-error notification preference behind one explanatory info popover. Notification authorization is independent of the app preference and refreshes on return to the app. System-audio capture is explicitly marked unused: this device bridge creates no process tap or screen capture session and must not imply an authorization status for either. See [translation and permission follow-up](translation-permissions-scroll-results.md).
-
-## Persistence / first launch
-
-On first launch, ask user to choose input and output; do not auto-select a potentially dangerous default output. After successful setup, enable `desiredRouting=true` by explicit confirmation; login launches and resumes if enabled. Manual Stop persists `desiredRouting=false` until Start. Store settings with a schema version and migrate safely. Reconfiguration failures should retain last known good configuration.
-
-## Accessibility and interaction
-
-Diagnostics contains a “Show debug information in the interface” toggle, disabled at each launch. Bridge and Audio hide technical runtime counters, queue/timing detail and detailed delay accounting until enabled. Normal meters, status, actionable faults, buffer configuration and a compact delay estimate stay available. Diagnostics, Copy status and export retain full information independently of this display choice.
-
-All controls keyboard accessible with VoiceOver labels. Preserve menu-bar status while settings window closes. Provide a status text alternative to icon color. Show reconnect progress without blocking the UI. Do not provide a fake green success status before audio callbacks have started and health is confirmed.
-
-### Output level control
-
-Bridge retains input trim. Its output card offers one level control: writable Core Audio device volume where available; digital stereo gain otherwise, labeled as a fallback. Digital gain is held at 0 dB when device volume is available, while the saved fallback gain is retained. Same-device capability refresh preserves the active mode until readback completes; Start waits for pending capability checks. Software output meters are upstream of device volume. The menu keeps device volume only; fallback gain is configured in Bridge. Remote output-gain commands are rejected when device volume is available or its check is pending; status exposes applied and saved fallback gain separately.
-
-### Diagnostic measurement window
-
-Reset counters in Diagnostics zeros displayed cumulative delivery, callback, frame, drift-event, AU timing and clipping counts by taking a snapshot baseline. Engine counters, callback timestamps, queues, drift and health checks stay intact. Interval processing mean is derived from interval render nanoseconds and block count. Current queue/rate/latency/clock/last-block values stay live; lifetime maxima and queue range are labeled for the run. Copy Status includes the reset timestamp and interval counts alongside lifetime totals. New routing attempts clear the baseline.
-
-### Effect processing enable
-
-The Effects tab has a persistent Enable effect processing switch, default on for existing installations. DSP/bypass changes use a 20 ms sample ramp. Off fades to dry before suspending plugin render calls; loaded processors remain editable and plugin meters/state pause after the fade. Bypass fades to dry but keeps rendering for editor feedback. Every app route retains the helper and its queues. Starting with DSP off prepares an empty chain and loads no saved plugins. First enable prepares/adopts the saved chain while dry forwarding continues; adoption enables rendering only if still requested. DSP changes never restart HAL or flush audio, including reconciliation after preparation. Manual Stop remains authoritative. This incurs transport overhead while off. Plugin latency is not aligned with dry audio, and retained tails/state or expensive setup can still make a transition audible. Requested/observed processing flags describe control state; already queued audio and the short fade may still finish. Latency accounting is an estimate, not physical transit measurement. See the continuous-switch amendment in ADR-003.
-
-### UI work and safe bundle updates
-
-Engine health/worker supervision continues at 20 Hz; normal informational snapshots publish at 5 Hz. Fault, delivery-state and AU command-response transitions publish immediately. Meters quantize display targets to whole dB and animate native Core Animation layers, avoiding SwiftUI/Canvas interpolation at display refresh rate. Release optimization remains the packaging configuration used for operator builds. Packaging refuses to replace an app bundle whose executable is running, since a running old executable can otherwise spawn a newly replaced incompatible helper. Helper startup passes an explicit transport version and captures the tail of setup errors; incompatible/failed startup exits require action instead of automatic retries.
-
-Startup distinguishes preparing devices/effects from filling audio queues. Delay shows Filling before output priming and averages collected samples from the first valid sample rather than displaying instantaneous values during the average's initial five seconds. This is presentation only; real startup overflows and later delivery losses remain counted. Diagnostics distinguishes reserve target from allocated capacity per queue (minimum 1024 frames). Capacity is headroom, not an additional fill target. App routes have separate capture and ready queues, including while DSP is off; the library retains its direct-ring implementation. Only occupied audio contributes to queue delay. A retained helper's backlog is not silently flushed when DSP is disabled.
+Controls remain keyboard/VoiceOver accessible; status is never color-only. Info buttons suppress persistent focus decoration but retain button activation. English/Czech translates host UI; supplied names/vendor editors/raw errors stay supplied. Copy Status and remote wire contracts remain English. [Testing](testing.md) tracks pending visual/accessibility acceptance.

@@ -1,77 +1,55 @@
-# Test strategy
+# Testing and acceptance
 
-Current 0.6 amendment: [ADR-003](decisions/ADR-003-reliability-and-operator-setup.md) supersedes automatic re-arming after device loss/identity/format/buffer changes or confirmed callback stalls. Simple/Expert setup and English/Czech UI are described there. Operational acceptance remains pending.
+## Recorded status
 
+Last recorded automated suite: **0.6.5/build 38, 72 XCTest tests, zero failures, 2026-10-13**. The suite covers route/persistence/recovery, FIFO/gain/FIR/drift, helper queue/wake primitives, remote parsing/epochs, editor state/completion, cancellation gates, sparse routes and timing accounting. It does not prove live HAL, Network.framework sockets or third-party plugin behavior. Subsequent menu/shell changes were not followed by a new suite run. See [provenance](history/validation.md).
 
-## Test layers
+Run `make test`; the script uses isolated temporary scratch storage. No new execution is implied by this checklist.
 
-1. **Pure unit tests**: matrix math, gain conversion/ramping, PCM layout conversions, ring buffer wraparound/overrun/underrun, resampler controller stability, schema migrations and retry policy.
-2. **Simulated integration tests**: fake device catalog, fake callback clock, deterministic input signals, device disappearance, format changes, permission denial and manual Stop precedence.
-3. **Hardware tests**: independent Core Audio input/output pairs (built-in, external USB, virtual where available), analog loopback or audio analyzer; optional deployment-specific end-to-end tests.
-4. **Operational soak tests**: extended streaming, recovery, login and power transitions.
+## Deterministic and stress cases
 
-## Deterministic DSP tests
+- Physical-channel addressing for planar/interleaved/multi-stream buffers; malformed/null/unequal-frame lists; nonfinite samples; missing patches and schema migration/backup.
+- Matrix summation without hidden normalization, explicit mono/fan-out/Off, gain ramps and live coherent publication/fade reversal.
+- FIFO wrap/capacity/full/empty, publication visibility, zero-fill underrun and bounded overrun.
+- FIR exact demand versus consumption, near-integer ratios, short-read history, priming/reset, prepared-plan owner/generation rejection and sample equivalence.
+- Fake clocks at positive/negative offsets with bounded occupancy/correction, anti-windup, starvation/refill and conserved pending source, including counter wrap.
+- Both orders of worker arm/publication, capture/output-space wakes, coalescing, EINTR/shutdown and mapping/semaphore lifetime. Existing natural-order tests do not force every interleaving.
+- Renderer adoption/acknowledgment/retirement, workgroup join/interval/leave, cached contexts, dirty latency notifications and callback-free teardown under stress/sanitizers where feasible.
+- Start cancellation before/during preparation and HAL startup; no retained-attempt growth over retries; unsafe detach memory retention. Dummy-ID component tests do not exercise actual driver starts.
+- Partial authenticated HTTP completion after disable, stale listener/feedback callbacks after restart, OSC exact tags/arguments/padding/integer/float/range checks; real sockets remain separate.
+- Invalid/oversized AU state, exactly-once completion, previous saved state and a subsequent command after both editor close paths. Real plugin property calls need live checks.
+- Simple capability filtering/readback/partial failure, expert preference retention, permission faults, manual Stop precedence, persisted latch and remote re-arm rejection.
 
-Installed AU follow-up: `AUChainTests.swift` has serialization/validation and shared-queue test source only; execution is deferred. Real plugin rendering, editor persistence, crash/hang isolation and cross-process throughput require later acceptance checks. See [AU results](au-hosting-results.md).
-
-- Identity matrix preserves each channel with numerical tolerance.
-- Swap routes L/R correctly; mono sum uses 0.5+0.5; mono input 1 duplicates only first channel.
-- Full-scale simultaneous summation shows expected clipping risk, not hidden normalization.
-- Gain 0 dB is unity; -6 dB approximately 0.501 amplitude; changes ramp without discontinuity.
-- FIFO ordering, exact wraparound, full/empty boundary, no stale data on underrun, bounded occupancy on overrun.
-- Simulate input/output clock offsets ±50, ±100 and ±200 ppm (test values, not device claims); verify bounded long-run occupancy and rate correction.
-- Verify sample format conversion and planar/interleaved handling against golden signals.
-- Meter silence = -infinity dBFS, clipping detection and correct per-channel isolation.
-
-## Supervisor tests
+## Lifecycle acceptance
 
 | Scenario | Expected |
 |---|---|
-| Login with configured devices | Start automatically if desiredRouting=true |
-| Login missing input | Waiting; no fallback; retry |
-| Login missing output | Waiting; no fallback; retry |
-| Input unplug/replug | Recover same UID and resume |
-| Output unplug/replug | Recover same UID; never use speakers instead |
-| Both missing | Report both; continue bounded retries |
-| Permission denied | Action required; no repeated permission prompt storm |
-| Stop during recovery | Cancel retry; remain stopped |
-| Restart app after manual Stop | Remain stopped until explicit Start |
-| Change device UID in settings | Reconfigure transactionally |
-| Format/rate change | Re-probe/rebuild safely |
-| Repeated failure | Retry capped at 30 seconds, no CPU spin |
+| Explicitly configured launch with resume opt-in and saved desired state | Start same UIDs only after readiness |
+| Manual Stop, relaunch or recovery | Stay stopped; retries cancelled |
+| Active input/output loss, changed identity/topology/rate/buffer or confirmed callback stall | Safe stop, actionable fault and persisted local re-arm latch |
+| Reconnect, relaunch or remote Start after that fault | No automatic resume or substitution; local re-arm required |
+| Permission/configuration/render fault | Action required; no prompt/retry storm |
+| Other recoverable helper fault | Retry same route with capped 1/2/4/8/16/30-second backoff |
+| Stop during preparation/retry/adoption | Cancel intent and prevent subsequent delivery |
+| Unsafe callback detach | Retain memory; block new route until restart |
+| Close Settings | Engine continues independently |
 
-## Hardware verification procedure
+## Hardware and plugin procedure
 
-- Use a known stereo test signal with distinguishable L/R content.
-- Verify actual input device identity and stream format in diagnostics.
-- Route between at least two distinct device pairs, including an external output if available; confirm selected UID remains fixed when the system default output changes.
-- Measure analog waveform levels and clipping before feeding downstream equipment; configure downstream input sensitivity separately.
-- Measure end-to-end latency using an external reference/loopback; do not infer latency solely from frame buffer size.
-- Run 12 hours with logged FIFO occupancy, ppm correction, underrun/overrun counts, callback stalls, CPU and memory.
-- During separate runs: unplug/replug input; unplug/replug output; change nominal rate; switch system default output; sleep/wake; restart app; test permission denial and reauthorization.
-- Record interruption duration and whether audio resumed without operator action. Recovery cannot guarantee zero audible interruption when hardware is physically disconnected.
+Use known distinguishable L/R signals and at least two stated device pairs, including an external output. Record build SHA, OS/architecture, exact UIDs/current stream formats, patches, rates, input/output buffers, reserve, AU block and chain. Check actual physical numbering, unpatched silence, summation/clipping and selected UID stability when system defaults change.
 
-## Quantitative provisional acceptance targets
+For comparisons, keep settings fixed and use equal windows (at least five minutes initially). Reset observation counters after startup; compare loaded DSP off, empty chain, each plugin, full chain and bypass. All app routes retain helper transport; a no-helper baseline requires a separately identified harness/build. Bypass renders plugins. Repeat Settings/editor open versus closed. Compare queue bounds, losses, clock trend, per-plugin/DSP/cycle/wake timing and main/helper CPU, alongside listening. Wall time is not CPU attribution; a full-scale indication is not a delivery glitch.
 
-- No crashes or deadlocks in 12-hour nominal hardware test.
-- No persistent FIFO occupancy trend toward full/empty; correction converges within configured bounds.
-- No unaccounted underruns/overruns; target zero during stable nominal run, document any occurrence.
-- CPU/memory reported, not assumed. Set thresholds after first measured baseline.
-- No unintended output-device substitution in any test.
-- Manual Stop remains authoritative across app restart and device events.
+Test unplug/replug each endpoint, external rate/buffer changes, callback stalls, sleep/wake, permissions, login and explicit re-arm. Confirm no substitute output and manual Stop remains authoritative. Check live DSP changes, adoption, state persistence and latency changes in legacy editors. Remote checks include tokens, denied IPs, partial requests at disable, restart generations, Local Network/firewall and Companion.
 
-## Reporting template
+Measure analog end-to-end latency with physical loopback; callback sizes/accounting are not the measurement. Then run **12 hours** at accepted settings, dry and with the deployment chain: no crash/deadlock, bounded queues/CPU/memory/correction and no unaccounted underrun/overrun after a defined startup window. Document every loss and interruption; do not erase failures or relabel inaudible losses as harmless. No broad device compatibility claim follows from one pair.
 
-For each test record: test ID, OS/architecture, input/output UID and format, build SHA, steps, expected, observed, metrics/log attachment, pass/fail/not-run, and issue link. Do not mark simulated tests as evidence of hardware compatibility.
+## UI and release review
 
-## ADR-002 routing extension (execution deferred)
+Review light/dark and English/Czech, long/missing names, scaled icons, device-volume/fallback/loading/error modes, inactive/CLIP meters, one Settings action, window focus, keyboard/VoiceOver and info-popover behavior. Verify debug defaults off and Reset counters doesn't change audio/health.
 
-`StereoRoutingTests.swift` adds N×2 summation/headroom, duplicate/invalid patches, backed-up v1 migration (including duplicate-channel sums), missing physical indices, multi-stream planar/interleaved addressing, C stereo fan-out/Off silence and local status classification. These sources have not been compiled or run. Add coherent live-publication/ramp stress tests, malformed/null/unequal-frame buffer lists, and nonfinite physical capture before the gate.
+Clean-account ZIP extraction, Gatekeeper path, microphone/notification/local-network authorization, stable installation/login and host/helper signatures remain release checks. [Compliance](compliance.md) is the deployment checklist.
 
-Manual acceptance: mono and stereo defaults; more than two inputs; duplicated L/R output pairs; explicit mono and headroom; Aggregate Device subdevice clock configuration; actual physical numbering; live connect/disconnect/gain; state after relaunch; AU before/after mixing placement; Copy status after a fault; visible menu colours and VoiceOver. Validate CPU, latency, drift, callbacks and partial device/layout changes on stated hardware. Earlier historical test results do not pass this extension.
+## Reporting
 
-## 0.6 reliability acceptance
-
-The 0.6.5 automated run passes 72 tests, including editor state/completion, cancellation gates, remote parsers/epochs, sparse routing, prepared FIR demand, runtime topology matching and complete-cycle accounting. See [actual checks and remaining live cases](audit-fixes-optimization-results.md). Earlier statements that routing regression sources were uncompiled describe the historical extension stage, not this run. Real socket, HAL transition and third-party editor failure checks remain separate.
-
-Use the comparison matrix, queue/wake/lifetime cases, explicit re-arm checks and 12-hour gate in [0.6 results](release-0.6-results.md#deferred-06-acceptance). For 0.6.2 compare an empty transport, loaded-DSP-off, individual active plugins and the full chain using equal measurement windows and identical device/reserve settings. DSP-off now retains transport; a no-helper baseline requires a separately identified earlier build or isolated harness. Include the transition/startup/monotonic supervision cases in [continuous DSP results](continuous-dsp-pipeline-results.md). No execution is implied by this checklist.
+For each test record ID, build SHA, device/plugin setup, steps, expected/observed result, duration, metrics and pass/fail/not-run. Separate automated simulation, operator observation, source inspection and executed hardware evidence. Never include audio samples, plugin state or bearer tokens in public reports.

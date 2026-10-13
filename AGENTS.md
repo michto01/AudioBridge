@@ -1,6 +1,6 @@
 # Codex agent guide — Audio Bridge
 
-You are implementing a **native macOS 14+ SwiftUI menu-bar audio bridge**. Read `README.md` and **all six files in `docs/` before modifying code**. They are the product contract. If a requirement conflicts with actual macOS APIs or hardware evidence, surface the conflict with a recommended correction; do not silently reinterpret it.
+You are implementing a **native macOS 14+ SwiftUI menu-bar audio bridge**. Read `README.md`, the current contracts listed in `docs/README.md`, and the accepted ADRs before modifying code. They are the product contract. Validation history is evidence, not a behavior specification. If a requirement conflicts with actual macOS APIs or hardware evidence, surface the conflict with a recommended correction; do not silently reinterpret it.
 
 ## Non-negotiable requirements
 
@@ -32,7 +32,7 @@ You are implementing a **native macOS 14+ SwiftUI menu-bar audio bridge**. Read 
 4. Run build/tests (and bundle verification when relevant). Report **actual** command outputs and what could not be run.
 5. Stop at the phase gate and summarize changed files, acceptance results, known issues and next slice.
 
-**Initial instruction:** Implement Phase 0 only: SwiftPM app shell, native menu-bar UI, `.app` bundling, `Info.plist`, Makefile targets, ad-hoc signing and tests. Do not implement Core Audio HAL until Phase 0 works. Then implement a device probe and gather hardware facts before locking down the audio backend.
+**Current stage:** Follow `docs/plan.md` for the active review slice and open gates. Phase 0–5 implementation exists; hardware/soak acceptance is still separate. Do not treat historical stage reports or old deferred-test instructions as current execution results or authorization to expand scope.
 
 ## Important conventions
 

@@ -28,7 +28,7 @@ No claim is made that every transition is inaudible: dry/wet paths are not laten
 
 This supersedes automatic device-loss reconnection in the original overview/architecture/Phase 4 contract. Recovery of other typed recoverable faults retains capped backoff. No vendor-specific audio handling, independent nominal-rate conversion, routing expansion or recording is introduced.
 
-Per-plugin wall timing and a bounded latest-starvation snapshot provide evidence, not proof of causality. Low latency and long-run reliability require matched comparisons, loopback and soak acceptance. See [0.6 results](../release-0.6-results.md). No Phase 5 operational gate is passed by this decision.
+Per-plugin wall timing and a bounded latest-starvation snapshot provide evidence, not proof of causality. Low latency and long-run reliability require matched comparisons, loopback and soak acceptance. See [testing](../testing.md) and [validation history](../history/validation.md). No Phase 5 operational gate is passed by this decision. Detailed AU ownership and telemetry choices are consolidated in [ADR-004](ADR-004-audio-unit-hosting.md) and [ADR-005](ADR-005-realtime-health-and-observability.md).
 
 ## Primary guidance
 

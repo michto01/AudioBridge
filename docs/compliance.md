@@ -4,6 +4,7 @@ This is an engineering checklist, not legal advice. Verify current Apple platfor
 
 ## Licensing and toolchain
 
+- Project source/documentation is [MIT licensed](../LICENSE). Installed Audio Units and Apple tools retain their own licenses; hosting doesn't redistribute those plugins.
 - Xcode is available without a paid developer subscription, subject to Apple's Xcode and SDK licence terms. SwiftPM and `xcodebuild`/`swiftc` may be invoked from the terminal.
 - The application does **not** require App Store distribution or an `.xcodeproj`.
 - Review licences for all third-party DSP/resampling code; record SPDX identifier, copyright notices and source provenance. Prefer Apple frameworks or permissively licensed dependencies; do not copy proprietary code.

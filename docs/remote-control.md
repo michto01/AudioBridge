@@ -61,9 +61,11 @@ Both listeners bind for network access when explicitly enabled. The HTTP API use
 
 The HTTP parser accepts one bounded request per connection (16 KiB maximum) and closes the connection after the response. Companion polling interval and meter smoothing should be adjusted on the Companion side; OSC meter reports are sampled once per second and are for status/automation, not precision metering.
 
-## Acceptance status
+## Lifecycle and acceptance
 
-Source compiled locally, but no HTTP/OSC packet, Companion integration, firewall/privacy prompt or remote control was exercised. See `docs/ui-remote-control-results.md`.
+Each listener has an independent generation. Disabling invalidates it before cancelling accepted connections; old acceptance/receive/status callbacks and feedback ticks cannot command or overwrite a replacement listener. Parsers enforce bounded HTTP frames and exact OSC tags/argument counts/padding/packet length, with distinct signed integer and float decoding. See [ADR-006](decisions/ADR-006-remote-control.md).
+
+Parser/epoch regressions passed in the recorded 0.6.5 suite. Actual socket shutdown/restart, Companion integration and firewall/privacy behavior remain separate acceptance cases in [testing](testing.md). Historical implementation/check provenance is in [validation history](history/validation.md).
 
 ## 0.6 device safety latch
 
